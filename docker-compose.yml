@@ -8,3 +8,35 @@ services:
       - "8000:8000"
     volumes:
       - ./app:/app
+
+    networks:
+      - chatbot-network
+    
+    depends_on:
+      - db
+
+  db:
+    image: mysql:8.0
+    container_name: chatbot-db
+
+    env_file:
+      - .env
+
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./data/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+    networks:
+      - chatbot-network
+
+networks:
+  chatbot-network:
+
+volumes:
+  mysql-data:

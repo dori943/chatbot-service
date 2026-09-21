@@ -194,7 +194,7 @@ function renderChat() {
 
 function updateInput() {
   const count = Array.from($('question').value).length;
-  $('char-count').textContent = count.toLocaleString() + ' / 2,000';
+  $('char-count').textContent = count.toLocaleString() + ' / 1,000';
   $('question').style.height = 'auto';
   $('question').style.height = Math.min($('question').scrollHeight, 150) + 'px';
 }
@@ -226,8 +226,8 @@ $('chat-form').addEventListener('submit', async event => {
     $('status').textContent = '메시지를 입력해 주세요.';
     return;
   }
-  if (Array.from(question).length > 2000) {
-    $('status').textContent = '메시지는 2,000자 이내로 입력해 주세요.';
+  if (Array.from(question).length > 1000) {
+    $('status').textContent = '메시지는 1,000자 이내로 입력해 주세요.';
     return;
   }
   let current = chats.find(c => c.id === activeId);

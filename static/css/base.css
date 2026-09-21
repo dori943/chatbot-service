@@ -287,21 +287,6 @@ body {
   flex-shrink: 0
 }
 
-.preview-badge {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 10px;
-  color: var(--muted)
-}
-
-.preview-badge i {
-  width: 5px;
-  height: 5px;
-  background: var(--accent);
-  border-radius: 50%
-}
-
 .login-button {
   border: 1px solid var(--line);
   background: var(--surface);
@@ -819,11 +804,6 @@ dialog h2 {
 
   .login-button {
     padding: 6px 11px
-  }
-
-  .preview-badge {
-    font-size: 9px;
-    gap: 4px
   }
 
   .chat-body {

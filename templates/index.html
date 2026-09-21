@@ -4,15 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>담다 — 범용 AI 채팅 UI</title>
-    <link rel="stylesheet" href="../shared/fonts.css">
-    <link rel="stylesheet" href="../shared/base.css">
-    <link rel="stylesheet" href="style.css">
-    <script src="../shared/chat.js" defer></script>
+    <link rel="stylesheet" href="/static/css/fonts.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script type="module" src="/static/js/chat.js"></script>
   </head>
   <body data-design="damda">
     <button class="scrim" id="scrim" aria-label="대화 목록 닫기" hidden></button>
     <aside class="sidebar" id="sidebar">
-      <a class="brand" href="../index.html">
+      <a class="brand" href="/">
         <span class="brand-symbol">
           <svg viewBox="0 0 40 40" fill="none" aria-hidden="true">
             <path d="M20 4v32M4 20h32M9 9l22 22M9 31L31 9" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
@@ -46,7 +46,6 @@
           대화가 여기에 모입니다.
         </p>
       </div>
-      <a class="back-link" href="../index.html">← 다른 디자인 보기</a>
       <button class="profile" data-auth>
         <span class="avatar">G</span>
         <span class="profile-text">
@@ -70,10 +69,6 @@
           <span>일상에 더해지는 또 하나의 관점</span>
         </div>
         <div class="top-actions">
-          <span class="preview-badge">
-            <i></i>
-            UI 미리보기
-          </span>
           <button class="login-button" data-auth>로그인</button>
         </div>
       </header>
@@ -141,10 +136,10 @@
         <p id="status" class="status" role="status"></p>
         <form id="chat-form" class="composer">
           <label class="sr-only" for="question">메시지 입력</label>
-          <textarea id="question" placeholder="무엇이든 물어보세요" rows="2" maxlength="2000" required></textarea>
+          <textarea id="question" placeholder="무엇이든 물어보세요" rows="2" maxlength="1000" required></textarea>
           <div class="composer-tools">
             <span class="input-hint">Enter로 전송 · Shift+Enter로 줄바꿈</span>
-            <span id="char-count">0 / 2,000</span>
+            <span id="char-count">0 / 1,000</span>
             <button class="send-button" id="send" type="submit" aria-label="메시지 보내기">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M12 19V5m-6 6 6-6 6 6"/>

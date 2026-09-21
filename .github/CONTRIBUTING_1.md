@@ -22,25 +22,23 @@
 ```
 main          배포 가능한 안정 버전. 직접 push 금지. develop에서만 PR로 병합.
  └ develop    통합 개발 브랜치. 기본 작업 기준점. 직접 push 금지.
-    ├ feat/login-api
-    ├ feat/chat-ui
-    ├ fix/ai-timeout
-    └ docs/readme
+    ├ feat/dohee-ai/login-api
+    ├ feat/sg-backend/chat-ui
 ```
 
 ### 브랜치 이름 규칙
 
 ```
-<타입>/<간단한-영문-설명>
+<타입>/<이름-역할>/<간단한-영문-설명>
 ```
 
 | 타입 | 용도 | 예시 |
 |---|---|---|
-| `feat` | 새 기능 | `feat/chat-ui`, `feat/user-auth` |
-| `fix` | 버그 수정 | `fix/session-expire` |
-| `refactor` | 리팩터링 (동작 변화 없음) | `refactor/ai-service` |
-| `docs` | 문서 | `docs/api-spec` |
-| `chore` | 설정·패키지·빌드 | `chore/gitignore` |
+| `feat` | 새 기능 | `feat/js-frontend/chat-ui`, `feat/dh-ai/user-auth` |
+| `fix` | 버그 수정 | `fix/sg-backend/session-expire` |
+| `refactor` | 리팩터링 (동작 변화 없음) | `refactor/dh-ai/ai-service` |
+| `docs` | 문서 | `docs/dh-ai/api-spec` |
+| `chore` | 설정·패키지·빌드 | `chore/dh-ai/gitignore` |
 
 - 소문자 + 하이픈(`-`)만 사용. 한글·공백·언더스코어 금지.
 - 브랜치는 **기능 하나 단위**로 작게. 작업이 끝나면 병합 후 삭제.
@@ -50,9 +48,9 @@ main          배포 가능한 안정 버전. 직접 push 금지. develop에서�
 ```bash
 git checkout develop
 git pull origin develop          # 항상 최신화 후 시작
-git checkout -b feat/chat-ui
+git checkout -b feat/dh-ai/chat-ui
 # ... 작업 & 커밋 ...
-git push -u origin feat/chat-ui
+git push -u origin feat/dh-ai/chat-ui
 # GitHub에서 develop ← feat/chat-ui 로 PR 생성
 ```
 
@@ -148,6 +146,42 @@ Update main.py            ← 파일명만으로는 의도를 알 수 없음
 | `blocked` | 다른 작업이 끝나야 진행 가능 |
 
 ---
+
+## 6. 프로젝트 구조
+
+```
+.
+├── app/
+│   ├── main.py                 # FastAPI 엔트리포인트
+│   ├── core/
+│   │   ├── config.py           # 환경 변수 로드
+│   │   ├── security.py         # 비밀번호 해싱, 세션/토큰
+│   │   └── logging.py          # 로깅 설정
+│   ├── models/                 # SQLAlchemy 모델 (User, ChatLog)
+│   ├── schemas/                # Pydantic 요청/응답 스키마
+│   ├── routers/
+│   │   ├── auth.py             # 회원가입 / 로그인 / 로그아웃
+│   │   └── chat.py             # /api/chat, /api/me/chats
+│   ├── services/
+│   │   └── ai_service.py       # AI API 호출 · 컨텍스트 구성 · 타임아웃
+│   └── db.py                   # DB 세션
+├── templates/                  # Jinja2 템플릿
+├── static/                     # CSS / JS
+├── scripts/
+│   └── check_logs.sql          # 평가용 대화 로그 확인 쿼리
+├── .github/
+│   ├── PULL_REQUEST_TEMPLATE.md
+│   └── ISSUE_TEMPLATE/
+├── data/                    # DB 내용
+├── docker-compose.yml       
+├── Dockerfile               
+├── .dockerignore           
+├── .env.example
+├── .gitignore
+├── requirements.txt
+├── CONTRIBUTING.md
+└── README.md
+```
 
 ## 6. 환경 변수 & 보안
 

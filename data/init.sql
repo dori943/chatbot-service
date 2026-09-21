@@ -1,1 +1,4 @@
-# 테이블 세팅 추가 예정
+CREATE TABLE IF NOT EXISTS login (
+    id VARCHAR(50)  PRIMARY KEY,
+    pw VARCHAR(255) NOT NULL
+);

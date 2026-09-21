@@ -9,5 +9,5 @@ COPY app /app
 COPY templates ./templates
 COPY static ./static
 
-EXPOSE 8080
+EXPOSE 8000
 CMD ["python", "main.py"]

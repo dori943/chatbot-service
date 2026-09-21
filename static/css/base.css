@@ -913,3 +913,13 @@ dialog h2 {
 .prompt-card {
   word-break: keep-all
 }
+
+.status[data-state="error"] {
+  color: #b42318;
+  background: #fff1f0;
+  border: 1px solid #f5c2be;
+  border-radius: 8px;
+  padding: 8px 12px;
+  height: auto;
+  overflow-wrap: anywhere;
+}

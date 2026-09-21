@@ -1,5 +1,5 @@
 from sqlalchemy import Column, VARCHAR, Integer, DateTime, ForeignKey
-from db         import Base
+from app.db import Base
 
 class ChatLog(Base):
     __tablename__ = "chatlog"

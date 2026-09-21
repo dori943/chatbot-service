@@ -1,71 +1,43 @@
-import { requestReply } from './api.js';
+import {
+  requestReply
+} from './api.js';
 
-/* 채팅 화면의 이벤트와 렌더링을 담당합니다.
-   실제 AI·회원 서버와 연결되지 않은 UI 예시이며, 대화만 이 브라우저에 저장합니다. */
-'use strict';
-const $ = (id) => document.getElementById(id);
-const design = document.body.dataset.design;
-const brand = {
-  damda: '담다',
-  orbit: 'ORBIT',
-  yeobaek: '여백'
-} [design];
-const storageKey = 'llm-front-example-v1-' + design;
+const MAX_QUESTION_LENGTH = 1000;
+const MAX_CHATS = 30;
+const elements = new Map();
+
+function getElement(id) {
+  if (!elements.has(id)) elements.set(id, document.getElementById(id));
+  return elements.get(id);
+}
+const brand = '담다';
+const storageKey = 'damda-chat-v1';
 let chats = [];
-let hasSavedChats = false;
 let activeId = null;
 let pending = null;
 let toastTimer;
 let signup = false;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-// 저장소 사용이 제한된 브라우저에서는 메모리에서만 동작합니다.
-try {
-  const loaded = JSON.parse(localStorage.getItem(storageKey) || 'null');
-  if (Array.isArray(loaded)) {
-    hasSavedChats = true;
-    chats = loaded.filter(c => c && typeof c.id === 'string' && typeof c.title === 'string' && Array.isArray(c.messages) && c.messages.every(m => m && ['user', 'assistant'].includes(m.role) && typeof m.text === 'string')).slice(0, 30);
+// 로컬 기록 읽기/쓰기 (사용자별 서버 기록 연동은 별도 작업)
+function loadChats() {
+  try {
+    const loaded = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    return Array.isArray(loaded) ? loaded.filter(isValidChat).slice(0, MAX_CHATS) : [];
+  } catch (_) {
+    return [];
   }
-} catch (_) {
-  chats = [];
 }
-if (!hasSavedChats) {
-  chats = [{
-    id: uid(),
-    title: '프로젝트 아이디어 정리',
-    messages: [{
-      role: 'user',
-      text: '작은 팀이 만들기 좋은 프로젝트 아이디어가 있을까?'
-    }, {
-      role: 'assistant',
-      text: '[미리보기 예시]\n일상의 작은 불편에서 출발해 보세요.\n\n1. 팀 일정과 할 일을 정리하는 도구\n2. 읽은 책과 메모를 모아두는 공간\n3. 질문과 답변을 저장하는 AI 챗봇\n\n첫 버전은 가장 중요한 기능 하나에 집중하면 좋아요.'
-    }]
-  }, {
-    id: uid(),
-    title: '주말 여행 계획 세우기',
-    messages: [{
-      role: 'user',
-      text: '하루를 여유롭게 보내는 여행 계획을 세워줘.'
-    }, {
-      role: 'assistant',
-      text: '[미리보기 예시]\n오전에는 산책, 점심에는 가보고 싶었던 식당, 오후에는 카페나 전시를 한 곳 골라보세요. 이동을 줄이면 더 편안하게 즐길 수 있어요.'
-    }]
-  }, {
-    id: uid(),
-    title: '글의 핵심을 간결하게',
-    messages: [{
-      role: 'user',
-      text: '글을 짧게 정리하는 방법을 알려줘.'
-    }, {
-      role: 'assistant',
-      text: '[미리보기 예시]\n가장 전하고 싶은 내용을 한 문장으로 먼저 써보세요. 그 문장을 설명하는 근거만 남기고, 같은 뜻의 표현은 하나로 합쳐보세요.'
-    }]
-  }];
+
+function isValidChat(chat) {
+  return chat && typeof chat.id === 'string' && typeof chat.title === 'string' &&
+    Array.isArray(chat.messages) && chat.messages.every(message =>
+      message && ['user', 'assistant'].includes(message.role) && typeof message.text === 'string');
 }
 
 function save() {
   try {
-    localStorage.setItem(storageKey, JSON.stringify(chats.slice(0, 30)));
+    localStorage.setItem(storageKey, JSON.stringify(chats.slice(0, MAX_CHATS)));
   } catch (_) {
     toast('브라우저 저장 공간을 사용할 수 없어 이번 화면에서만 유지됩니다.');
   }
@@ -73,23 +45,23 @@ function save() {
 
 function toast(text) {
   clearTimeout(toastTimer);
-  $('toast').textContent = text;
-  $('toast').hidden = false;
+  getElement('toast').textContent = text;
+  getElement('toast').hidden = false;
   toastTimer = setTimeout(() => {
-    $('toast').hidden = true;
+    getElement('toast').hidden = true;
   }, 3000);
 }
 
 function setDrawer(open) {
-  $('sidebar').classList.toggle('is-open', open);
-  $('scrim').hidden = !open;
-  $('menu').setAttribute('aria-expanded', String(open));
-  if (open) $('history-search').focus();
+  getElement('sidebar').classList.toggle('is-open', open);
+  getElement('scrim').hidden = !open;
+  getElement('menu').setAttribute('aria-expanded', String(open));
+  if (open) getElement('history-search').focus();
 }
 
 function renderHistory() {
-  const query = $('history-search').value.trim().toLowerCase();
-  $('history-list').replaceChildren();
+  const query = getElement('history-search').value.trim().toLowerCase();
+  getElement('history-list').replaceChildren();
   const visible = chats.filter(c => c.title.toLowerCase().includes(query));
   visible.forEach(c => {
     const button = document.createElement('button');
@@ -105,11 +77,11 @@ function renderHistory() {
       renderHistory();
       setDrawer(false);
     });
-    $('history-list').append(button);
+    getElement('history-list').append(button);
   });
-  $('history-count').textContent = chats.length;
-  $('history-empty').hidden = visible.length > 0;
-  $('history-empty').textContent = query ? '검색 결과가 없습니다.' : '아직 대화가 없습니다. 첫 질문을 남겨보세요.';
+  getElement('history-count').textContent = chats.length;
+  getElement('history-empty').hidden = visible.length > 0;
+  getElement('history-empty').textContent = query ? '검색 결과가 없습니다.' : '아직 대화가 없습니다. 첫 질문을 남겨보세요.';
 }
 async function copyText(text, parent) {
   try {
@@ -132,13 +104,14 @@ async function copyText(text, parent) {
   }
 }
 
+// 선택한 대화의 메시지와 작업 버튼을 표시합니다.
 function renderChat() {
   const current = chats.find(c => c.id === activeId);
   const messages = current?.messages || [];
-  $('welcome').hidden = messages.length > 0;
-  $('transcript').hidden = !messages.length;
-  $('conversation-title').textContent = current?.title || '새로운 대화';
-  $('transcript').replaceChildren();
+  getElement('welcome').hidden = messages.length > 0;
+  getElement('transcript').hidden = !messages.length;
+  getElement('conversation-title').textContent = current?.title || '새로운 대화';
+  getElement('transcript').replaceChildren();
   if (messages.length) {
     const tools = document.createElement('div');
     tools.className = 'thread-tools';
@@ -157,7 +130,7 @@ function renderChat() {
       toast('이 브라우저에서 대화를 삭제했습니다.');
     });
     tools.append(remove);
-    $('transcript').append(tools);
+    getElement('transcript').append(tools);
   }
   messages.forEach(m => {
     const article = document.createElement('article');
@@ -167,11 +140,6 @@ function renderChat() {
     const name = document.createElement('b');
     name.textContent = m.role === 'user' ? '나' : brand;
     meta.append(name);
-    if (m.role === 'assistant') {
-      const tag = document.createElement('span');
-      tag.textContent = '예시 응답';
-      meta.append(tag);
-    }
     const text = document.createElement('div');
     text.className = 'message-text';
     text.textContent = m.text;
@@ -184,7 +152,7 @@ function renderChat() {
       copy.addEventListener('click', () => copyText(m.text, article));
       article.append(copy);
     }
-    $('transcript').append(article);
+    getElement('transcript').append(article);
   });
   const pane = document.querySelector('.chat-body');
   requestAnimationFrame(() => {
@@ -193,41 +161,49 @@ function renderChat() {
 }
 
 function updateInput() {
-  const count = Array.from($('question').value).length;
-  $('char-count').textContent = count.toLocaleString() + ' / 1,000';
-  $('question').style.height = 'auto';
-  $('question').style.height = Math.min($('question').scrollHeight, 150) + 'px';
+  const count = Array.from(getElement('question').value).length;
+  getElement('char-count').textContent = count.toLocaleString() + ' / ' + MAX_QUESTION_LENGTH.toLocaleString();
+  getElement('question').style.height = 'auto';
+  getElement('question').style.height = Math.min(getElement('question').scrollHeight, 150) + 'px';
 }
 
 function newChat() {
   if (pending) return;
   activeId = null;
-  $('question').value = '';
-  $('status').textContent = '';
+  getElement('question').value = '';
+  setStatus();
   updateInput();
   renderChat();
   renderHistory();
   setDrawer(false);
-  $('question').focus();
+  getElement('question').focus();
+}
+
+function setStatus(message = '', type = 'info') {
+  const status = getElement('status');
+  status.dataset.state = type;
+  status.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  status.textContent = message;
 }
 
 function setBusy(value) {
-  $('send').hidden = value;
-  $('stop').hidden = !value;
-  $('question').disabled = value;
+  getElement('send').hidden = value;
+  getElement('stop').hidden = !value;
+  getElement('question').disabled = value;
   document.querySelectorAll('[data-new], [data-prompt], .history-item, .delete-chat').forEach(b => b.disabled = value);
 }
 
-$('chat-form').addEventListener('submit', async event => {
+// 질문 전송과 취소, 실패 시 대화 복원을 처리합니다.
+async function handleSubmit(event) {
   event.preventDefault();
   if (pending) return;
-  const question = $('question').value.trim();
+  const question = getElement('question').value.trim();
   if (!question) {
-    $('status').textContent = '메시지를 입력해 주세요.';
+    setStatus('메시지를 입력해 주세요.', 'error');
     return;
   }
-  if (Array.from(question).length > 1000) {
-    $('status').textContent = '메시지는 1,000자 이내로 입력해 주세요.';
+  if (Array.from(question).length > MAX_QUESTION_LENGTH) {
+    setStatus('메시지는 1,000자 이내로 입력해 주세요.', 'error');
     return;
   }
   let current = chats.find(c => c.id === activeId);
@@ -236,11 +212,11 @@ $('chat-form').addEventListener('submit', async event => {
   if (!current) {
     current = {
       id: uid(),
-      title: question.slice(0, 30),
+      title: question.slice(0, MAX_CHATS),
       messages: []
     };
     chats.unshift(current);
-    chats = chats.slice(0, 30);
+    chats = chats.slice(0, MAX_CHATS);
     activeId = current.id;
   }
   const controller = new AbortController();
@@ -252,15 +228,15 @@ $('chat-form').addEventListener('submit', async event => {
   renderChat();
   renderHistory();
   setBusy(true);
-  $('status').textContent = '답변 화면을 준비하고 있어요…';
+  setStatus('답변을 기다리고 있어요…');
   try {
     const reply = await requestReply(question, controller.signal);
     current.messages.push({
       role: 'assistant',
       text: reply
     });
-    $('question').value = '';
-    $('status').textContent = '';
+    getElement('question').value = '';
+    setStatus();
     save();
   } catch (error) {
     current.messages.pop();
@@ -268,70 +244,88 @@ $('chat-form').addEventListener('submit', async event => {
       chats = previousChats;
       activeId = null;
     }
-    $('status').textContent = error.name === 'AbortError' ? '응답을 중지했어요. 입력한 질문은 남겨두었습니다.' : '응답을 받지 못했어요. 다시 시도해 주세요.';
+    const cancelled = error.name === 'AbortError';
+    setStatus(
+      cancelled ? '응답 대기를 중지했어요. 입력한 질문은 남겨두었습니다.'
+        : (error.message || '응답을 받지 못했어요. 다시 시도해 주세요.'),
+      cancelled ? 'info' : 'error'
+    );
   } finally {
     pending = null;
     setBusy(false);
     renderChat();
     renderHistory();
     updateInput();
-    $('question').focus();
+    getElement('question').focus();
   }
-});
-$('stop').addEventListener('click', () => pending?.abort());
-$('question').addEventListener('input', updateInput);
-$('question').addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-    event.preventDefault();
-    $('chat-form').requestSubmit();
-  }
-});
-document.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', newChat));
-document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => {
-  if (pending) return;
-  $('question').value = b.dataset.prompt;
-  updateInput();
-  $('question').focus();
-}));
-$('history-search').addEventListener('input', renderHistory);
-$('menu').addEventListener('click', () => setDrawer(!$('sidebar').classList.contains('is-open')));
-$('close-history')?.addEventListener('click', () => setDrawer(false));
-$('scrim').addEventListener('click', () => setDrawer(false));
-document.querySelector('[data-focus-search]')?.addEventListener('click', () => $('history-search').focus());
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape') setDrawer(false);
-});
+}
 
-// 로그인과 회원가입은 UI만 확인합니다. 비밀번호는 어디에도 저장하지 않습니다.
-document.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => {
-  $('auth-status').textContent = '';
-  $('auth-dialog').showModal();
-  $('auth-name').focus();
-}));
-document.querySelector('[data-close]').addEventListener('click', () => $('auth-dialog').close());
-$('auth-dialog').addEventListener('close', () => {
-  $('auth-form').reset();
-  $('auth-status').textContent = '';
-});
-document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
-  signup = b.dataset.tab === 'signup';
-  document.querySelectorAll('[data-tab]').forEach(t => t.classList.toggle('active', t === b));
-  $('auth-title').textContent = signup ? '새로운 대화를 시작해요.' : '다시 만나 반가워요.';
-  $('confirm-wrap').hidden = !signup;
-  $('auth-confirm').required = signup;
-  $('auth-password').autocomplete = signup ? 'new-password' : 'current-password';
-  document.querySelector('.auth-submit').textContent = signup ? '회원가입 화면 확인' : '로그인 화면 확인';
-  $('auth-status').textContent = '';
-}));
-$('auth-form').addEventListener('submit', event => {
-  event.preventDefault();
-  if (signup && $('auth-password').value !== $('auth-confirm').value) {
-    $('auth-status').textContent = '비밀번호가 서로 다릅니다.';
-    return;
-  }
-  $('auth-status').textContent = '입력 확인 완료! 실제 ' + (signup ? '회원가입' : '로그인') + '은 백엔드 연결 후 사용할 수 있어요.';
-  $('auth-password').value = '';
-  $('auth-confirm').value = '';
-});
+// 채팅 이벤트 연결
+function bindChatEvents() {
+  getElement('chat-form').addEventListener('submit', handleSubmit);
+  getElement('stop').addEventListener('click', () => pending?.abort());
+  getElement('question').addEventListener('input', updateInput);
+  getElement('question').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      getElement('chat-form').requestSubmit();
+    }
+  });
+  document.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', newChat));
+  document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => {
+    if (pending) return;
+    getElement('question').value = b.dataset.prompt;
+    updateInput();
+    getElement('question').focus();
+  }));
+  getElement('history-search').addEventListener('input', renderHistory);
+  getElement('menu').addEventListener('click', () => setDrawer(!getElement('sidebar').classList.contains('is-open')));
+  getElement('close-history')?.addEventListener('click', () => setDrawer(false));
+  getElement('scrim').addEventListener('click', () => setDrawer(false));
+  document.querySelector('[data-focus-search]')?.addEventListener('click', () => getElement('history-search').focus());
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') setDrawer(false);
+  });
+
+}
+
+// 인증 모달의 입력과 탭 전환을 처리합니다.
+function bindAuthEvents() {
+  document.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => {
+    getElement('auth-status').textContent = '';
+    getElement('auth-dialog').showModal();
+    getElement('auth-name').focus();
+  }));
+  document.querySelector('[data-close]').addEventListener('click', () => getElement('auth-dialog').close());
+  getElement('auth-dialog').addEventListener('close', () => {
+    getElement('auth-form').reset();
+    getElement('auth-status').textContent = '';
+  });
+  document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
+    signup = b.dataset.tab === 'signup';
+    document.querySelectorAll('[data-tab]').forEach(t => t.classList.toggle('active', t === b));
+    getElement('auth-title').textContent = signup ? '새로운 대화를 시작해요.' : '다시 만나 반가워요.';
+    getElement('confirm-wrap').hidden = !signup;
+    getElement('auth-confirm').required = signup;
+    getElement('auth-password').autocomplete = signup ? 'new-password' : 'current-password';
+    document.querySelector('.auth-submit').textContent = signup ? '회원가입 화면 확인' : '로그인 화면 확인';
+    getElement('auth-status').textContent = '';
+  }));
+  getElement('auth-form').addEventListener('submit', event => {
+    event.preventDefault();
+    if (signup && getElement('auth-password').value !== getElement('auth-confirm').value) {
+      getElement('auth-status').textContent = '비밀번호가 서로 다릅니다.';
+      return;
+    }
+    getElement('auth-status').textContent = '입력 확인 완료! 실제 ' + (signup ? '회원가입' : '로그인') + '은 백엔드 연결 후 사용할 수 있어요.';
+    getElement('auth-password').value = '';
+    getElement('auth-confirm').value = '';
+  });
+}
+
+chats = loadChats();
+bindChatEvents();
+bindAuthEvents();
+updateInput();
 renderHistory();
 renderChat();

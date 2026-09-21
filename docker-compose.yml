@@ -6,8 +6,10 @@ services:
     container_name: chatbot-backend
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     volumes:
-      - ./app:/app
+      - ./app:/code/app
 
     networks:
       - chatbot-network

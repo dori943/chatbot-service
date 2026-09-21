@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-from models.login   import Login
-from schemas.auth   import AuthRequest
+from app.models.login import Login
+from app.schemas.auth import AuthRequest
 
 def register(data: AuthRequest, db: Session):
     user = Login(id=data.id, pw=data.pw)

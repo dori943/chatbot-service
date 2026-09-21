@@ -14,9 +14,6 @@ secrets/
 
 # ===== Python =====
 __pycache__/
-app/__pycache__
-routers/__pycache__
-services/__pycache__
 *.py[cod]
 *$py.class
 *.so

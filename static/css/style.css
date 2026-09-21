@@ -1,0 +1,66 @@
+/* 01 담다: 밝고 차분한 기본 채팅 레이아웃 */
+:root {
+  --bg: #fff;
+  --side: #f6f7f9;
+  --surface: #fff;
+  --text: #232834;
+  --muted: #7d8591;
+  --line: #e8ebef;
+  --active: #edf0f6;
+  --accent: #5263df;
+  --accent-ink: #fff
+}
+
+.brand {
+  padding: 0 10px
+}
+
+.sidebar .brand-symbol {
+  color: #2b3246
+}
+
+.topbar {
+  border-bottom: 1px solid #f4f5f8
+}
+
+.new-chat {
+  box-shadow: 0 2px 4px #11182703
+}
+
+.welcome {
+  padding-top: 52px
+}
+
+h1 em {
+  color: #6d7585
+}
+
+.hero-mark {
+  color: #5263df
+}
+
+.prompt-card:nth-child(2) .card-icon {
+  color: #469785
+}
+
+.prompt-card:nth-child(3) .card-icon {
+  color: #b083ca
+}
+
+.prompt-card:nth-child(4) .card-icon {
+  color: #c59b53
+}
+
+.composer {
+  box-shadow: 0 5px 22px #202b4c07
+}
+
+.hero-subtitle {
+  font-size: 12px
+}
+
+@media(max-width:760px) {
+  .welcome {
+    padding-top: 23px
+  }
+}

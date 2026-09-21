@@ -246,6 +246,8 @@ $('chat-form').addEventListener('submit', async event => {
     return;
   }
   let current = chats.find(c => c.id === activeId);
+  const previousChats = chats.slice();
+  const isNewChat = !current;
   if (!current) {
     current = {
       id: uid(),
@@ -277,6 +279,10 @@ $('chat-form').addEventListener('submit', async event => {
     save();
   } catch (error) {
     current.messages.pop();
+    if (isNewChat) {
+      chats = previousChats;
+      activeId = null;
+    }
     $('status').textContent = error.name === 'AbortError' ? '응답을 중지했어요. 입력한 질문은 남겨두었습니다.' : '응답을 받지 못했어요. 다시 시도해 주세요.';
   } finally {
     pending = null;

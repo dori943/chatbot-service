@@ -16,7 +16,7 @@ class ChatRequest(BaseModel):
     question: str = Field(
         ...,
         min_length=1,
-        max_length=1000,
+        max_length=5000,
         description="사용자 질문. 앞뒤 공백은 제거되며 빈 문자열은 거부된다.",
     )
 

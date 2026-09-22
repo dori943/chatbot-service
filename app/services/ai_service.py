@@ -64,7 +64,7 @@ AI_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", "0.7"))
 # 챗봇 용도에는 low 로 충분하다. 빈 문자열로 두면 모델 기본값을 그대로 쓴다.
 AI_THINKING_LEVEL = os.getenv("AI_THINKING_LEVEL", "low").strip()
 
-MAX_QUESTION_LENGTH = int(os.getenv("MAX_QUESTION_LENGTH", "1000"))
+MAX_QUESTION_LENGTH = int(os.getenv("MAX_QUESTION_LENGTH", "5000"))
 
 # 남은 전체 예산이 이보다 적으면 폴백을 시도하지 않는다 (어차피 못 끝낸다).
 MIN_FALLBACK_BUDGET_SECONDS = 0.5

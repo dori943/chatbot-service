@@ -1,25 +1,75 @@
-import {
-  requestReply
-} from './api.js';
+import { getAuthenticatedId } from './auth.js';
 
-const MAX_QUESTION_LENGTH = 1000;
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_QUESTION_LENGTH = 5000;
 const MAX_CHATS = 30;
 const elements = new Map();
+
+// 채팅 요청과 응답 검증, 취소 및 시간 초과를 처리합니다.
+async function requestReply(question, signal) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  let timedOut = false;
+  if (signal?.aborted) abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ question }),
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = data?.detail ?? data;
+      const message = typeof detail?.message === 'string' ? detail.message : null;
+      const fallback = {
+        401: '로그인이 필요합니다. 다시 로그인해 주세요.',
+        404: '채팅 서비스를 아직 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.',
+        405: '채팅 서비스를 아직 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.',
+        422: '질문 내용을 확인해 주세요. 질문은 5,000자 이내로 입력해 주세요.',
+        429: '요청이 많습니다. 잠시 후 다시 시도해 주세요.',
+      };
+      throw new Error(message || fallback[response.status] || '서버 오류로 응답을 받지 못했습니다.');
+    }
+    if (typeof data?.answer !== 'string' || !data.answer.trim()) {
+      throw new Error('답변을 불러오지 못했습니다. 다시 시도해 주세요.');
+    }
+    return data.answer;
+  } catch (error) {
+    if (signal?.aborted) throw new DOMException('사용자가 중지했습니다.', 'AbortError');
+    if (timedOut) throw new Error('응답 시간이 초과됐어요. 다시 시도해 주세요.');
+    if (error instanceof TypeError) throw new Error('서버에 연결할 수 없습니다. 연결 상태를 확인해 주세요.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  }
+}
 
 function getElement(id) {
   if (!elements.has(id)) elements.set(id, document.getElementById(id));
   return elements.get(id);
 }
 const brand = '담다';
-const storageKey = 'damda-chat-v1';
+const guestStorageKey = 'damda-chat-v1';
+const storageKeyFor = id => id ? `${guestStorageKey}:user:${encodeURIComponent(id)}` : guestStorageKey;
+let storageKey = storageKeyFor(getAuthenticatedId());
 let chats = [];
 let activeId = null;
 let pending = null;
 let toastTimer;
-let signup = false;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-// 로컬 기록 읽기/쓰기 (사용자별 서버 기록 연동은 별도 작업)
+// 브라우저 안에서 게스트와 각 로그인 ID의 대화를 따로 저장합니다.
 function loadChats() {
   try {
     const loaded = JSON.parse(localStorage.getItem(storageKey) || '[]');
@@ -193,6 +243,23 @@ function setBusy(value) {
   document.querySelectorAll('[data-new], [data-prompt], .history-item, .delete-chat').forEach(b => b.disabled = value);
 }
 
+function switchChatOwner(id) {
+  const nextStorageKey = storageKeyFor(id);
+  if (nextStorageKey === storageKey) return;
+  pending?.abort();
+  pending = null;
+  storageKey = nextStorageKey;
+  chats = loadChats();
+  activeId = null;
+  getElement('question').value = '';
+  getElement('history-search').value = '';
+  setStatus();
+  setBusy(false);
+  updateInput();
+  renderHistory();
+  renderChat();
+}
+
 // 질문 전송과 취소, 실패 시 대화 복원을 처리합니다.
 async function handleSubmit(event) {
   event.preventDefault();
@@ -203,7 +270,7 @@ async function handleSubmit(event) {
     return;
   }
   if (Array.from(question).length > MAX_QUESTION_LENGTH) {
-    setStatus('메시지는 1,000자 이내로 입력해 주세요.', 'error');
+    setStatus('메시지는 5,000자 이내로 입력해 주세요.', 'error');
     return;
   }
   let current = chats.find(c => c.id === activeId);
@@ -220,6 +287,7 @@ async function handleSubmit(event) {
     activeId = current.id;
   }
   const controller = new AbortController();
+  const requestStorageKey = storageKey;
   pending = controller;
   current.messages.push({
     role: 'user',
@@ -231,6 +299,7 @@ async function handleSubmit(event) {
   setStatus('답변을 기다리고 있어요…');
   try {
     const reply = await requestReply(question, controller.signal);
+    if (storageKey !== requestStorageKey) return;
     current.messages.push({
       role: 'assistant',
       text: reply
@@ -239,6 +308,7 @@ async function handleSubmit(event) {
     setStatus();
     save();
   } catch (error) {
+    if (storageKey !== requestStorageKey) return;
     current.messages.pop();
     if (isNewChat) {
       chats = previousChats;
@@ -251,12 +321,14 @@ async function handleSubmit(event) {
       cancelled ? 'info' : 'error'
     );
   } finally {
-    pending = null;
-    setBusy(false);
-    renderChat();
-    renderHistory();
-    updateInput();
-    getElement('question').focus();
+    if (pending === controller) {
+      pending = null;
+      setBusy(false);
+      renderChat();
+      renderHistory();
+      updateInput();
+      getElement('question').focus();
+    }
   }
 }
 
@@ -289,83 +361,9 @@ function bindChatEvents() {
 
 }
 
-// 인증 모달의 입력과 탭 전환을 처리합니다.
-function bindAuthEvents() {
-  document.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => {
-    getElement('auth-status').textContent = '';
-    getElement('auth-dialog').showModal();
-    getElement('auth-name').focus();
-  }));
-  document.querySelector('[data-close]').addEventListener('click', () => getElement('auth-dialog').close());
-  getElement('auth-dialog').addEventListener('close', () => {
-    getElement('auth-form').reset();
-    getElement('auth-status').textContent = '';
-  });
-  document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
-    signup = b.dataset.tab === 'signup';
-    document.querySelectorAll('[data-tab]').forEach(t => t.classList.toggle('active', t === b));
-    getElement('auth-title').textContent = signup ? '새로운 대화를 시작해요.' : '다시 만나 반가워요.';
-    getElement('confirm-wrap').hidden = !signup;
-    getElement('auth-confirm').required = signup;
-    getElement('auth-password').autocomplete = signup ? 'new-password' : 'current-password';
-    document.querySelector('.auth-submit').textContent = signup ? '회원가입 화면 확인' : '로그인 화면 확인';
-    getElement('auth-status').textContent = '';
-  }));
-  getElement('auth-form').addEventListener('submit', async event => {
-    event.preventDefault();
-    const id = getElement('auth-name').value;
-    const password = getElement('auth-password').value;
-
-    if (signup && password !== getElement('auth-confirm').value) {
-        getElement('auth-status').textContent = '비밀번호가 서로 다릅니다.';
-        return;
-    }
-
-    
-    const endpoint = signup
-        ? '/auth/register'
-        : '/auth/login';
-
-    try {
-        console.log(endpoint)
-        console.log(id)
-        console.log(password)
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                id: id,
-                pw: password
-            })
-        });
-        console.log(response.status)
-
-        const result = await response.json();
-
-        if (!response.ok) {
-            getElement('auth-status').textContent = '요청에 실패했습니다.';
-            return;
-        }
-
-        if (signup) {
-            getElement('auth-status').textContent = result.message;
-        } else {
-            localStorage.setItem('access_token', result.access_token);
-            getElement('auth-status').textContent = result.message;
-        }
-
-    } catch (error) {
-        console.log(error)
-        getElement('auth-status').textContent = '서버 연결에 실패했습니다.';
-    }
-  });
-}
-
 chats = loadChats();
+window.addEventListener('authchange', event => switchChatOwner(event.detail.id));
 bindChatEvents();
-bindAuthEvents();
 updateInput();
 renderHistory();
 renderChat();

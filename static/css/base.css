@@ -287,6 +287,14 @@ body {
   flex-shrink: 0
 }
 
+#header-user {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px
+}
+
 .login-button {
   border: 1px solid var(--line);
   background: var(--surface);

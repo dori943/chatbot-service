@@ -91,4 +91,5 @@ node --test tests/chat-api.test.mjs
 python scripts/ai_smoke_test.py validation limit fallback
 ```
 
+처음이면 [팀원용 테스트 가이드](docs/testing-guide.md)를 따라 자동 테스트와 수동 브라우저 테스트를 진행하세요.
 MySQL·브라우저·실제 Gemini 호출 검증은 [통합 테스트 안내](docs/chat-integration.md)를 참고하세요.

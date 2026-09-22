@@ -3,7 +3,7 @@ from sqlalchemy.exc         import SQLAlchemyError
 from datetime               import datetime, timezone
 
 from app.core.config        import AI_CONTEXT_TURNS
-from app.services.chat_main import AIResult
+from app.schemas.chat       import AIResult
 from app.models.chatlog     import ChatLog
 
 def save_result(db: Session, user_id: str, question: str, result: AIResult):

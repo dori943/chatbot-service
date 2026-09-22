@@ -146,6 +146,8 @@ class AIResult:
     def is_success(self) -> bool:
         return self.status == "success"
 
+    # user_id는 숫자형 채팅 기록 ID가 아니라 사용자가 가입할 때 정한 로그인 ID입니다.
+    # login.id와 이를 참조하는 chat_logs.user_id가 VARCHAR이므로 int 대신 str로 선언합니다.
     def to_log_row(self, user_id: str, question: str) -> dict[str, Any]:
         """chat_logs 테이블에 넣을 dict. 백엔드가 그대로 사용하면 된다.
 

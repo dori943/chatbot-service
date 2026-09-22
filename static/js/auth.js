@@ -1,10 +1,21 @@
 const elements = new Map();
 
+export function getAccessToken() {
+  try {
+    return localStorage.getItem('access_token');
+  } catch (_) {
+    return null;
+  }
+}
+
 export function getAuthenticatedId() {
   try {
-    const payload = localStorage.getItem('access_token')?.split('.')[1];
+    const payload = getAccessToken()?.split('.')[1];
     if (!payload) return null;
-    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    // JWT의 UTF-8 사용자 ID를 복원한다. 실제 서명 검증은 백엔드가 수행한다.
+    const bytes = Uint8Array.from(atob(payload.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+    const claims = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now()) return null;
     return typeof claims.id === 'string' && claims.id ? claims.id : null;
   } catch (_) {
     return null;

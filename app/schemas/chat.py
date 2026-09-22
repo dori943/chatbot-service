@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,15 +20,18 @@ class ChatRequest(BaseModel):
         description="사용자 질문. 앞뒤 공백은 제거되며 빈 문자열은 거부된다.",
     )
 
-    @field_validator("question")
+    @field_validator("question", mode="before")
     @classmethod
     def strip_and_check(cls, v: str) -> str:
+        if not isinstance(v, str):
+            raise ValueError("질문은 문자열이어야 합니다.")
         cleaned = v.strip()
         if not cleaned:
             raise ValueError("질문을 입력해 주세요.")
         return cleaned
 
     model_config = {
+        "extra": "forbid",
         "json_schema_extra": {
             "examples": [{"question": "FastAPI 배포 방법 알려줘"}]
         }
@@ -38,7 +41,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """POST /api/chat 성공 응답 (HTTP 200)."""
 
-    answer: str
+    answer: str = Field(min_length=1, max_length=5000)
     request_id: str
     created_at: datetime
 
@@ -79,6 +82,11 @@ class ChatLogItem(BaseModel):
     answer: str | None
     status: str
     created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def attach_utc(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
     model_config = {"from_attributes": True}
 

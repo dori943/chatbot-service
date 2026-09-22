@@ -52,7 +52,13 @@ def _banner(title: str) -> None:
     print(f"\n{'=' * 68}\n  {title}\n{'=' * 68}")
 
 
+_failures = 0
+
+
 def _verdict(ok: bool, label: str) -> None:
+    global _failures
+    if not ok:
+        _failures += 1
     print(f"\n→ {label}: {'✅ PASS' if ok else '❌ FAIL'}")
 
 
@@ -66,7 +72,7 @@ async def test_basic() -> None:
     print(f"주 모델: {ai_service.AI_MODEL} / 폴백: {ai_service.AI_FALLBACK_MODEL}")
 
     q = ai_service.validate_question("  Gemini API가 뭐야? 두 문장으로 설명해줘.  ")
-    result = await ai_service.generate_answer(q, user_id=1)
+    result = await ai_service.generate_answer(q, user_id="smoke-test")
 
     print(f"status        : {result.status}")
     print(f"model         : {result.model}")
@@ -98,7 +104,7 @@ async def test_context() -> None:
     print(f"roles         : {[c['role'] for c in payload.contents]}")
 
     result = await ai_service.generate_answer(
-        "내가 방금 뭘 물어봤지?", history, user_id=1
+        "내가 방금 뭘 물어봤지?", history, user_id="smoke-test"
     )
     print(f"answer        : {result.answer}")
     _verdict("배포" in (result.answer or ""), "이전 질문(배포)을 기억하는가")
@@ -118,7 +124,7 @@ async def test_timeout() -> None:
     from app.services import ai_service
     importlib.reload(ai_service)
 
-    result = await ai_service.generate_answer("긴 글을 요약해줘", user_id=1)
+    result = await ai_service.generate_answer("긴 글을 요약해줘", user_id="smoke-test")
 
     print(f"status        : {result.status}")
     print(f"error_code    : {result.error_code}")
@@ -142,7 +148,8 @@ async def test_validation() -> None:
 
     _banner("4. 입력 검증")
 
-    cases = [("빈 문자열", ""), ("공백만", "     "), ("None", None), ("초장문", "가" * 5000)]
+    cases = [("빈 문자열", ""), ("공백만", "     "), ("None", None),
+             ("초장문", "가" * (ai_service.MAX_QUESTION_LENGTH + 1))]
     ok = True
     for label, value in cases:
         try:
@@ -281,8 +288,11 @@ async def main() -> None:
             await fn()
         except Exception as e:  # noqa: BLE001
             print(f"💥 {name} 에러: {type(e).__name__}: {e}")
+            _verdict(False, name)
 
     print("\n완료.\n")
+    if _failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

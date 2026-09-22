@@ -2,6 +2,7 @@ from dataclasses      import dataclass
 from sqlalchemy.orm   import Session
 
 from app.schemas.chat import ChatRequest
+from app.services     import chat_db
 
 @dataclass
 class AIResult:

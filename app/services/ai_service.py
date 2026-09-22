@@ -146,7 +146,7 @@ class AIResult:
     def is_success(self) -> bool:
         return self.status == "success"
 
-    def to_log_row(self, user_id: int, question: str) -> dict[str, Any]:
+    def to_log_row(self, user_id: str, question: str) -> dict[str, Any]:
         """chat_logs 테이블에 넣을 dict. 백엔드가 그대로 사용하면 된다.
 
         `model` 컬럼에 실제 사용된 모델이 들어가므로,
@@ -392,7 +392,7 @@ async def generate_answer(
     question: str,
     history: Iterable[dict[str, Any]] | None = None,
     *,
-    user_id: int | None = None,
+    user_id: str | None = None,
     request_id: str | None = None,
 ) -> AIResult:
     """질문 + 이전 대화로 AI 응답을 생성한다.

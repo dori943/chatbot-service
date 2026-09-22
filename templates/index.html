@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/style.css">
     <script type="module" src="/static/js/chat.js"></script>
+    <script type="module" src="/static/js/auth.js"></script>
   </head>
   <body data-design="damda">
     <button class="scrim" id="scrim" aria-label="대화 목록 닫기" hidden></button>
@@ -173,14 +174,9 @@
           <label for="auth-confirm">비밀번호 확인</label>
           <input id="auth-confirm" type="password" autocomplete="new-password" placeholder="비밀번호를 한 번 더 입력하세요">
         </div>
-        <button class="auth-submit" type="submit">로그인 화면 확인</button>
+        <button class="auth-submit" type="submit">로그인</button>
       </form>
       <p id="auth-status" role="status"></p>
-      <p class="preview-explain">
-        화면 예시입니다. 실제 계정은 생성되지 않으며
-        <br>
-        아이디·비밀번호는 저장하거나 전송하지 않습니다.
-      </p>
     </dialog>
     <div id="toast" class="toast" role="status" hidden></div>
   </body>

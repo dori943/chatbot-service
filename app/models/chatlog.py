@@ -5,7 +5,7 @@ from app.db import Base
 class ChatLog(Base):
     __tablename__ = "chat_logs"
 
-    id         = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    id         = Column(BigInteger(),  primary_key=True      , autoincrement=True)
     user_id    = Column(VARCHAR(50),   ForeignKey("login.id"), nullable=False)
     question   = Column(VARCHAR(5000), nullable=False)
     answer     = Column(VARCHAR(5000), nullable=True)

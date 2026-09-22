@@ -1,40 +1,40 @@
-import asyncio
 import logging
-import time
-from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.exceptions import RequestValidationError
-from fastapi.routing import APIRoute
-from starlette.concurrency import run_in_threadpool
+from fastapi               import APIRouter, Depends, Query
+from fastapi.exceptions    import RequestValidationError
+from fastapi.routing       import APIRoute
+from sqlalchemy.orm        import Session
 
-from app.core.dependencies import get_current_user_id
-from app.core.errors import APIError, api_error_handler
-from app.schemas.chat import ChatLogListResponse, ChatRequest, ChatResponse, ErrorResponse
-from app.services import ai_service, chat as chat_service
+from app.core.dependencies import get_token_id
+from app.core.errors       import APIError, api_error_handler
+from app.schemas.chat      import ChatRequest
+from app.services          import ai_service, chat as chat_service
+from app.db                import get_db
+from app.services          import chat_main, get_my_chat
 
 logger = logging.getLogger(__name__)
-
 
 class ChatRoute(APIRoute):
     def get_route_handler(self):
         original = super().get_route_handler()
 
         async def handler(request):
-            try:
-                return await original(request)
-            except RequestValidationError:
-                return await api_error_handler(request, APIError(
-                    422, "INVALID_INPUT", "요청 내용을 확인해 주세요. 질문은 공백만으로 구성할 수 없으며 최대 5,000자입니다.",
-                ))
+            try: return await original(request)
 
+            except RequestValidationError:
+                return await api_error_handler(request, APIError(422, "INVALID_INPUT", "요청 내용을 확인해 주세요. 질문은 공백만으로 구성할 수 없으며 최대 5,000자입니다.",))
         return handler
 
+router = APIRouter(prefix="/api", tags=["chat"])
 
-router = APIRouter(
-    prefix="/api", tags=["chat"], route_class=ChatRoute,
-    responses={code: {"model": ErrorResponse} for code in (401, 422, 429, 502, 503, 504)},
-)
+@router.post("/chat")
+async def send_chat(data: ChatRequest, user_id: str = Depends(get_token_id), db: Session = Depends(get_db)):
+    return await chat_main(data, user_id, db)
+
+@router.get("/me/chats")
+async def get_my_chat(user_id: str=Depends(get_token_id), db: Session = Depends(get_db)):
+    return await get_my_chat(user_id, db)
+
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -92,9 +92,5 @@ async def send_chat(data: ChatRequest, user_id: str = Depends(get_current_user_i
 
 
 @router.get("/me/chats", response_model=ChatLogListResponse)
-def get_my_chats(
-    limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    user_id: str = Depends(get_current_user_id),
-):
+def get_my_chats(user_id: str = Depends(get_current_user_id)):
     return chat_service.list_chats(user_id, limit, offset)

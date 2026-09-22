@@ -1,5 +1,16 @@
 const elements = new Map();
 
+export function getAuthenticatedId() {
+  try {
+    const payload = localStorage.getItem('access_token')?.split('.')[1];
+    if (!payload) return null;
+    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof claims.id === 'string' && claims.id ? claims.id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function getElement(id) {
   if (!elements.has(id)) elements.set(id, document.getElementById(id));
   return elements.get(id);
@@ -7,9 +18,31 @@ function getElement(id) {
 
 let signup = false;
 
+function renderAuthUI() {
+  const id = getAuthenticatedId();
+  const loggedIn = Boolean(id);
+  getElement('header-user').textContent = id || '';
+  getElement('header-user').hidden = !loggedIn;
+  document.querySelector('.login-button').textContent = loggedIn ? '로그아웃' : '로그인';
+  document.querySelector('.profile .avatar').textContent = loggedIn ? id[0].toUpperCase() : 'G';
+  document.querySelector('.profile strong').textContent = id || '게스트';
+  document.querySelector('.profile small').textContent = loggedIn ? '로그아웃' : '로그인하여 이어가기';
+  document.querySelector('.profile').setAttribute('aria-label', loggedIn ? `${id} 계정 로그아웃` : '로그인');
+}
+
+function notifyAuthChange() {
+  window.dispatchEvent(new CustomEvent('authchange', { detail: { id: getAuthenticatedId() } }));
+}
+
 // 인증 모달의 입력과 탭 전환을 처리합니다.
 function bindAuthEvents() {
   document.querySelectorAll('[data-auth]').forEach(button => button.addEventListener('click', () => {
+    if (getAuthenticatedId()) {
+      localStorage.removeItem('access_token');
+      renderAuthUI();
+      notifyAuthChange();
+      return;
+    }
     getElement('auth-status').textContent = '';
     getElement('auth-dialog').showModal();
     getElement('auth-name').focus();
@@ -57,9 +90,14 @@ function bindAuthEvents() {
 
       if (signup) {
         status.textContent = result.message;
+        getElement('auth-password').value = '';
+        getElement('auth-confirm').value = '';
       } else if (typeof result.token === 'string' && result.token) {
         localStorage.setItem('access_token', result.token);
-        status.textContent = result.message;
+        getElement('auth-form').reset();
+        getElement('auth-dialog').close();
+        renderAuthUI();
+        notifyAuthChange();
       } else {
         status.textContent = result.message || '로그인에 실패했습니다.';
       }
@@ -69,4 +107,10 @@ function bindAuthEvents() {
   });
 }
 
+renderAuthUI();
 bindAuthEvents();
+window.addEventListener('storage', event => {
+  if (event.key !== 'access_token') return;
+  renderAuthUI();
+  notifyAuthChange();
+});

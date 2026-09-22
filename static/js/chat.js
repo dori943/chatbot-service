@@ -1,3 +1,5 @@
+import { getAuthenticatedId } from './auth.js';
+
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_QUESTION_LENGTH = 1000;
 const MAX_CHATS = 30;
@@ -58,14 +60,16 @@ function getElement(id) {
   return elements.get(id);
 }
 const brand = '담다';
-const storageKey = 'damda-chat-v1';
+const guestStorageKey = 'damda-chat-v1';
+const storageKeyFor = id => id ? `${guestStorageKey}:user:${encodeURIComponent(id)}` : guestStorageKey;
+let storageKey = storageKeyFor(getAuthenticatedId());
 let chats = [];
 let activeId = null;
 let pending = null;
 let toastTimer;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-// 로컬 기록 읽기/쓰기 (사용자별 서버 기록 연동은 별도 작업)
+// 브라우저 안에서 게스트와 각 로그인 ID의 대화를 따로 저장합니다.
 function loadChats() {
   try {
     const loaded = JSON.parse(localStorage.getItem(storageKey) || '[]');
@@ -239,6 +243,23 @@ function setBusy(value) {
   document.querySelectorAll('[data-new], [data-prompt], .history-item, .delete-chat').forEach(b => b.disabled = value);
 }
 
+function switchChatOwner(id) {
+  const nextStorageKey = storageKeyFor(id);
+  if (nextStorageKey === storageKey) return;
+  pending?.abort();
+  pending = null;
+  storageKey = nextStorageKey;
+  chats = loadChats();
+  activeId = null;
+  getElement('question').value = '';
+  getElement('history-search').value = '';
+  setStatus();
+  setBusy(false);
+  updateInput();
+  renderHistory();
+  renderChat();
+}
+
 // 질문 전송과 취소, 실패 시 대화 복원을 처리합니다.
 async function handleSubmit(event) {
   event.preventDefault();
@@ -266,6 +287,7 @@ async function handleSubmit(event) {
     activeId = current.id;
   }
   const controller = new AbortController();
+  const requestStorageKey = storageKey;
   pending = controller;
   current.messages.push({
     role: 'user',
@@ -277,6 +299,7 @@ async function handleSubmit(event) {
   setStatus('답변을 기다리고 있어요…');
   try {
     const reply = await requestReply(question, controller.signal);
+    if (storageKey !== requestStorageKey) return;
     current.messages.push({
       role: 'assistant',
       text: reply
@@ -285,6 +308,7 @@ async function handleSubmit(event) {
     setStatus();
     save();
   } catch (error) {
+    if (storageKey !== requestStorageKey) return;
     current.messages.pop();
     if (isNewChat) {
       chats = previousChats;
@@ -297,12 +321,14 @@ async function handleSubmit(event) {
       cancelled ? 'info' : 'error'
     );
   } finally {
-    pending = null;
-    setBusy(false);
-    renderChat();
-    renderHistory();
-    updateInput();
-    getElement('question').focus();
+    if (pending === controller) {
+      pending = null;
+      setBusy(false);
+      renderChat();
+      renderHistory();
+      updateInput();
+      getElement('question').focus();
+    }
   }
 }
 
@@ -336,6 +362,7 @@ function bindChatEvents() {
 }
 
 chats = loadChats();
+window.addEventListener('authchange', event => switchChatOwner(event.detail.id));
 bindChatEvents();
 updateInput();
 renderHistory();

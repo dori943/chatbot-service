@@ -1,9 +1,10 @@
-from sqlalchemy.orm import Session
-from app.models.login import Login
-from app.schemas.auth import AuthRequest
+from sqlalchemy.orm     import Session
+from app.models.login   import Login
+from app.schemas.auth   import AuthRequest
+from app.utils.security import verify_password, hash_password, create_token
 
 def register(data: AuthRequest, db: Session):
-    user = Login(id=data.id, pw=data.pw)
+    user = Login(id=data.id, pw=hash_password(data.pw))
 
     db.add(user)
     db.commit()
@@ -17,7 +18,13 @@ def login(data: AuthRequest, db: Session):
         .first()
     )
 
-    if user is None or user.pw != data.pw:
+    if user is None or not verify_password(data.pw, user.pw):
         return {"message": "login failed"}
 
-    return {"message": "login success"}
+    token = create_token(user.id)
+
+    return {
+        "message"    : "login success",
+        "token"      : token,
+        "token_type" : "bearer"
+    }

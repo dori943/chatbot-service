@@ -15,5 +15,5 @@ CREATE TABLE IF NOT EXISTS chat_logs (
     model       VARCHAR(80) NULL,
     created_at  DATETIME(6) NOT NULL,
 
-    FOREIGN KEY (user_id) REFERENCES login(id),
+    FOREIGN KEY (user_id) REFERENCES login(id)
 )

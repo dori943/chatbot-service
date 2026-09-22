@@ -3,14 +3,14 @@ import logging
 import time
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
 from app.core.dependencies import get_current_user_id
 from app.core.errors import APIError, api_error_handler
-from app.schemas.chat import ChatRequest, ChatResponse, ErrorResponse
+from app.schemas.chat import ChatLogListResponse, ChatRequest, ChatResponse, ErrorResponse
 from app.services import ai_service, chat as chat_service
 
 logger = logging.getLogger(__name__)
@@ -85,3 +85,12 @@ async def send_chat(data: ChatRequest, user_id: str = Depends(get_current_user_i
             result.request_id,
         )
     return ChatResponse(answer=result.answer, request_id=result.request_id, created_at=created_at)
+
+
+@router.get("/me/chats", response_model=ChatLogListResponse)
+def get_my_chats(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user_id: str = Depends(get_current_user_id),
+):
+    return chat_service.list_chats(user_id, limit, offset)

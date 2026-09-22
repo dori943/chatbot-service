@@ -7,6 +7,7 @@ from sqlalchemy.exc import OperationalError
 from app.main import app
 from app.models.chatlog import ChatLog
 from app.services import ai_service, chat as chat_service
+from app.utils import security
 
 
 @pytest.fixture
@@ -138,3 +139,40 @@ def test_database_failure_is_not_reported_as_success(client, auth_headers, ai_mo
 def test_home_and_openapi_start(client):
     assert client.get("/").status_code == 200
     assert "/api/chat" in client.get("/openapi.json").json()["paths"]
+
+
+def test_history_ownership_and_pagination(client, auth_headers, ai_mock):
+    for question in ("first", "second"):
+        assert client.post("/api/chat", json={"question": question}, headers=auth_headers).status_code == 200
+    bob_headers = {"Authorization": f"Bearer {security.create_token('bob')}"}
+    assert client.post("/api/chat", json={"question": "bob-private"}, headers=bob_headers).status_code == 200
+    response = client.get("/api/me/chats?limit=1&offset=0&user_id=bob", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+    assert response.json()["items"][0]["question"] == "second"
+    assert response.json()["items"][0]["created_at"].endswith("Z")
+    assert "bob-private" not in response.text
+    page2 = client.get("/api/me/chats?limit=1&offset=1", headers=auth_headers).json()
+    assert page2["items"][0]["question"] == "first"
+    assert client.get("/api/me/chats?offset=2", headers=auth_headers).json()["items"] == []
+    assert client.get("/api/me/chats", headers=bob_headers).json()["total"] == 1
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "offset=-1", "limit=abc"])
+def test_history_validates_pagination(client, auth_headers, query):
+    response = client.get(f"/api/me/chats?{query}", headers=auth_headers)
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+
+
+def test_history_requires_authentication(client):
+    assert client.get("/api/me/chats").status_code == 401
+
+
+def test_failed_answer_appears_in_history(client, auth_headers, ai_mock):
+    ai_mock.side_effect = RuntimeError("provider-down")
+    assert client.post("/api/chat", json={"question": "failed"}, headers=auth_headers).status_code == 502
+    row = client.get("/api/me/chats", headers=auth_headers).json()["items"][0]
+    assert row["question"] == "failed"
+    assert row["status"] == "error"
+    assert row["answer"] is None

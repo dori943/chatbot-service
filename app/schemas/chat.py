@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -82,6 +82,11 @@ class ChatLogItem(BaseModel):
     answer: str | None
     status: str
     created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def attach_utc(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
     model_config = {"from_attributes": True}
 

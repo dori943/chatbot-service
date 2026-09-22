@@ -311,15 +311,55 @@ function bindAuthEvents() {
     document.querySelector('.auth-submit').textContent = signup ? '회원가입 화면 확인' : '로그인 화면 확인';
     getElement('auth-status').textContent = '';
   }));
-  getElement('auth-form').addEventListener('submit', event => {
+  getElement('auth-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (signup && getElement('auth-password').value !== getElement('auth-confirm').value) {
-      getElement('auth-status').textContent = '비밀번호가 서로 다릅니다.';
-      return;
+    const id = getElement('auth-name').value;
+    const password = getElement('auth-password').value;
+
+    if (signup && password !== getElement('auth-confirm').value) {
+        getElement('auth-status').textContent = '비밀번호가 서로 다릅니다.';
+        return;
     }
-    getElement('auth-status').textContent = '입력 확인 완료! 실제 ' + (signup ? '회원가입' : '로그인') + '은 백엔드 연결 후 사용할 수 있어요.';
-    getElement('auth-password').value = '';
-    getElement('auth-confirm').value = '';
+
+    
+    const endpoint = signup
+        ? '/auth/register'
+        : '/auth/login';
+
+    try {
+        console.log(endpoint)
+        console.log(id)
+        console.log(password)
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                id: id,
+                pw: password
+            })
+        });
+        console.log(response.status)
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            getElement('auth-status').textContent = '요청에 실패했습니다.';
+            return;
+        }
+
+        if (signup) {
+            getElement('auth-status').textContent = result.message;
+        } else {
+            localStorage.setItem('access_token', result.access_token);
+            getElement('auth-status').textContent = result.message;
+        }
+
+    } catch (error) {
+        console.log(error)
+        getElement('auth-status').textContent = '서버 연결에 실패했습니다.';
+    }
   });
 }
 

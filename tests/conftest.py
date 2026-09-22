@@ -18,7 +18,7 @@ def database(monkeypatch):
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine)
     with sessions() as db:
-        db.add_all([Login(id=name, pw="unused-test-hash") for name in ("alice", "bob", "건탁")])
+        db.add_all([Login(id=name, pw="unused-test-hash") for name in ("alice", "bob", "이건탁")])
         db.commit()
     monkeypatch.setattr(dependencies, "SessionLocal", sessions)
     monkeypatch.setattr(security, "KEY", "local-test-signing-key-at-least-32-bytes")

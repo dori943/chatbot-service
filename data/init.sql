@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS login (
 CREATE TABLE IF NOT EXISTS chat_logs (
     id          BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id     VARCHAR(50) NOT NULL,
-    question    TEXT NOT NULL,
-    answer      TEXT NULL,
+    question    VARCHAR(5000) NOT NULL,
+    answer      VARCHAR(5000) NULL,
     status      VARCHAR(20) NOT NULL,
     error_code  VARCHAR(50) NULL,
     latency_ms  INT NULL,
@@ -16,4 +16,4 @@ CREATE TABLE IF NOT EXISTS chat_logs (
     created_at  DATETIME(6) NOT NULL,
 
     FOREIGN KEY (user_id) REFERENCES login(id)
-)
+);

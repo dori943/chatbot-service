@@ -45,10 +45,14 @@ async def send_chat(data: ChatRequest, user_id: str = Depends(get_current_user_i
         question = ai_service.validate_question(data.question)
     except ai_service.QuestionValidationError as exc:
         raise APIError(422, exc.error_code, exc.message, request_id) from None
+    # 대화방(conversations) 테이블이 아직 없으므로 사용자 기준 최근 N턴을 문맥으로 쓴다.
+    # DB 조회는 동기라 스레드풀로 넘긴다. 실패해도 빈 리스트가 와서 답변은 진행된다.
+    history = await run_in_threadpool(chat_service.get_recent_history, user_id)
     try:
-        # 대화방 ID가 없는 현재 계약에서는 다른 방의 기록을 문맥으로 섞지 않는다.
         result = await asyncio.wait_for(
-            ai_service.generate_answer(question, user_id=user_id, request_id=request_id),
+            ai_service.generate_answer(
+                question, history, user_id=user_id, request_id=request_id
+            ),
             timeout=ai_service.AI_TOTAL_TIMEOUT_SECONDS,
         )
     except Exception as exc:

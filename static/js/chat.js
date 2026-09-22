@@ -1,7 +1,7 @@
 import { getAuthenticatedId } from './auth.js';
 
 const REQUEST_TIMEOUT_MS = 30_000;
-const MAX_QUESTION_LENGTH = 1000;
+const MAX_QUESTION_LENGTH = 5000;
 const MAX_CHATS = 30;
 const elements = new Map();
 
@@ -35,7 +35,7 @@ async function requestReply(question, signal) {
         401: '로그인이 필요합니다. 다시 로그인해 주세요.',
         404: '채팅 서비스를 아직 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.',
         405: '채팅 서비스를 아직 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.',
-        422: '질문 내용을 확인해 주세요. 질문은 1,000자 이내로 입력해 주세요.',
+        422: '질문 내용을 확인해 주세요. 질문은 5,000자 이내로 입력해 주세요.',
         429: '요청이 많습니다. 잠시 후 다시 시도해 주세요.',
       };
       throw new Error(message || fallback[response.status] || '서버 오류로 응답을 받지 못했습니다.');
@@ -270,7 +270,7 @@ async function handleSubmit(event) {
     return;
   }
   if (Array.from(question).length > MAX_QUESTION_LENGTH) {
-    setStatus('메시지는 1,000자 이내로 입력해 주세요.', 'error');
+    setStatus('메시지는 5,000자 이내로 입력해 주세요.', 'error');
     return;
   }
   let current = chats.find(c => c.id === activeId);

@@ -3,10 +3,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.routers.auth import router as login_router
+from app.core.errors import APIError, api_error_handler
 
 import uvicorn
 
 app = FastAPI()
+app.add_exception_handler(APIError, api_error_handler)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(login_router)
 templates = Jinja2Templates(directory="templates")

@@ -1,10 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.templating  import Jinja2Templates
 
 from app.routers.auth import router as login_router
 from app.routers.chat import router as chat_router
-from app.core.errors import APIError, api_error_handler
+from app.core.errors  import APIError, api_error_handler
 
 import uvicorn
 

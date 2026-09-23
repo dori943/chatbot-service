@@ -31,7 +31,7 @@ def save_result(db: Session, user_id: str, question: str, result: AIResult):
         raise
 
 
-async def get_list_chat(user_id: str, db: Session):
+def get_list_chat(user_id: str, db: Session):
     rows = (
         db.query(ChatLog)
         .filter(ChatLog.user_id == user_id)
@@ -44,7 +44,7 @@ async def get_list_chat(user_id: str, db: Session):
 
     return rows
 
-async def get_history(user_id: str, db: Session, limit: int = AI_CONTEXT_TURNS) -> list[dict[str, str]]:
+def get_history(user_id: str, db: Session, limit: int = AI_CONTEXT_TURNS) -> list[dict[str, str]]:
     try:
         rows = (
             db.query(ChatLog)

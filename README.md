@@ -2,6 +2,9 @@
 
 FastAPI에서 화면과 API를 함께 제공하는 AI 챗봇입니다.
 
+현재 리팩토링 브랜치의 비동기 DB 설정·응답 변경·검증 명령은 [비동기 DB 전환 검증](docs/async-testing.md)을 참고하세요.
+아래 기존 통합 명세 중 채팅 오류 응답·입력 검증은 아직 이관 중입니다.
+
 ## 실행
 
 1. `.env.example`을 참고해 `.env`를 준비합니다. 기존 `.env`는 덮어쓰지 않습니다.
@@ -27,7 +30,7 @@ docker compose logs --tail 50 backend
 | POST | `/auth/register` | `{ "id": "...", "pw": "..." }` 회원가입 | 없음 |
 | POST | `/auth/login` | 같은 형식으로 로그인, 성공 시 `token` 반환 | 없음 |
 | POST | `/api/chat` | 질문 전송, AI 응답 및 성공·실패 기록 저장 | Bearer 토큰 |
-| GET | `/api/me/chats?limit=50&offset=0` | 본인 기록 조회, 최신순 | Bearer 토큰 |
+| GET | `/api/me/chats` | 본인 전체 기록 조회, 최신순 | Bearer 토큰 |
 
 채팅 요청 헤더: `Authorization: Bearer <로그인 응답의 token>`
 
@@ -47,9 +50,9 @@ docker compose logs --tail 50 backend
 }
 ```
 
-기록 응답은 `{ "items": [...], "total": 0 }` 형식이며 각 항목은
+기록 응답은 배열 `[...]` 형식이며 각 항목은
 `id`, `question`, `answer`, `status`, `created_at`을 포함합니다.
-`total`은 본인의 전체 기록 수입니다. `limit`은 1~100, `offset`은 0 이상입니다.
+페이지네이션은 사용하지 않습니다.
 사용자 ID는 요청 본문이 아닌 검증된 로그인 토큰에서 가져옵니다.
 
 오류는 `{ "error_code": "...", "message": "한국어 안내", "request_id": null }` 형식입니다.

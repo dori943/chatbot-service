@@ -67,7 +67,7 @@ def test_unconfigured_auth_service(client, monkeypatch, auth_headers):
 
 
 def test_database_failure_is_not_an_invalid_login(client, monkeypatch, auth_headers):
-    def unavailable(*args, **kwargs):
+    async def unavailable(*args, **kwargs):
         raise SQLAlchemyError("test database unavailable")
 
     monkeypatch.setattr(auth, "check_user", unavailable)
@@ -77,7 +77,7 @@ def test_database_failure_is_not_an_invalid_login(client, monkeypatch, auth_head
 
 
 def test_invalid_token_does_not_query_user(client, monkeypatch):
-    def unexpected_query(*args, **kwargs):
+    async def unexpected_query(*args, **kwargs):
         pytest.fail("Invalid tokens must be rejected before querying the user")
 
     monkeypatch.setattr(auth, "check_user", unexpected_query)

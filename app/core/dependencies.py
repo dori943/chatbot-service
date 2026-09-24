@@ -1,20 +1,20 @@
 import jwt
 
-from fastapi          import Depends
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.exc   import SQLAlchemyError
-from sqlalchemy.orm   import Session
+from fastapi                import Depends
+from fastapi.security       import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.exc         import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors  import APIError
-from app.db           import get_db
-from app.services     import auth
-from app.utils        import security
+from app.core.errors        import APIError
+from app.db                 import get_db
+from app.services           import auth
+from app.utils              import security
 
 bearer = HTTPBearer(auto_error=False)
 
-def get_token_id(
+async def get_token_id(
     credentials : HTTPAuthorizationCredentials | None = Depends(bearer),
-    db : Session = Depends(get_db),
+    db          : AsyncSession                        = Depends(get_db),
 ) -> str:
     failed = APIError(401, "UNAUTHORIZED", "로그인이 필요합니다. 다시 로그인해 주세요.")
     if credentials is None: raise failed
@@ -35,7 +35,7 @@ def get_token_id(
         raise failed
 
     try:
-        exists = auth.check_user(user_id, db)
+        exists = await auth.check_user(user_id, db)
     except SQLAlchemyError:
         raise APIError(503, "DB_UNAVAILABLE", "데이터베이스에 연결할 수 없습니다.") from None
     if not exists:

@@ -1,8 +1,15 @@
 from pydantic    import BaseModel
 from dataclasses import dataclass
+from datetime    import datetime
 
 class ChatRequest(BaseModel):
     question: str
+
+
+class ChatResponse(BaseModel):
+    answer     : str
+    request_id : str
+    created_at : datetime
 
 
 @dataclass

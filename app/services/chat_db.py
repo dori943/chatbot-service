@@ -1,7 +1,8 @@
 import logging
 
-from sqlalchemy.orm         import Session
+from sqlalchemy             import select
 from sqlalchemy.exc         import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime               import datetime, timezone
 
 from app.core.config        import AI_CONTEXT_TURNS
@@ -10,7 +11,7 @@ from app.models.chatlog     import ChatLog
 
 logger = logging.getLogger(__name__)
 
-def save_result(db: Session, user_id: str, question: str, result: AIResult):
+async def save_result(db: AsyncSession, user_id: str, question: str, result: AIResult):
     created_at = datetime.now(timezone.utc)
 
     try:
@@ -27,40 +28,37 @@ def save_result(db: Session, user_id: str, question: str, result: AIResult):
         )
 
         db.add(row)
-        db.commit()
+        await db.commit()
         
         return created_at
     except SQLAlchemyError:
-        db.rollback()
+        await db.rollback()
         raise
 
 
-def get_list_chat(user_id: str, db: Session):
-    rows = (
-        db.query(ChatLog)
-        .filter(ChatLog.user_id == user_id)
-        .order_by(
-            ChatLog.created_at.desc(),
-            ChatLog.id.desc(),
+async def get_list_chat(user_id: str, db: AsyncSession):
+    async with db.begin():
+        rows = await db.scalars(
+            select(ChatLog)
+            .where(ChatLog.user_id == user_id)
+            .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
         )
-        .all()
-    )
+        return list(rows)
 
-    return rows
-
-def get_history(user_id: str, db: Session, limit: int = AI_CONTEXT_TURNS) -> list[dict[str, str]]:
+async def get_history(user_id: str, db: AsyncSession, limit: int = AI_CONTEXT_TURNS) -> list[dict[str, str]]:
     try:
-        rows = (
-            db.query(ChatLog)
-            .filter(ChatLog.user_id == user_id, ChatLog.status == "success")
-            .order_by(ChatLog.id.desc())
-            .limit(limit)
-            .all()
-        )
-        return [
-            {"question": row.question, "answer": row.answer}
-            for row in reversed(rows)
-        ]
+        # 문맥 조회 트랜잭션을 끝내 DB 연결을 반환한 뒤 AI를 기다린다.
+        async with db.begin():
+            rows = await db.scalars(
+                select(ChatLog)
+                .where(ChatLog.user_id == user_id, ChatLog.status == "success")
+                .order_by(ChatLog.id.desc())
+                .limit(limit)
+            )
+            return [
+                {"question": row.question, "answer": row.answer}
+                for row in reversed(rows.all())
+            ]
 
     except SQLAlchemyError:
         logger.error("chat_history_load_failed")

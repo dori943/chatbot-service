@@ -13,8 +13,8 @@ from app.core.config import (
     AI_API_KEY,
     AI_MODEL,
     AI_FALLBACK_MODEL,
-    AI_TIMEOUT,
-    AI_TOTAL_TIMEOUT,
+    AI_TIMEOUT_SECONDS,
+    AI_TOTAL_TIMEOUT_SECONDS,
     AI_MAX_RETRIES,
     AI_CONTEXT_TURNS,
     AI_MAX_TOKENS,
@@ -235,7 +235,7 @@ async def generate_answer(
         return int((time.perf_counter() - started) * 1000)
 
     def remaining() -> float:
-        return AI_TOTAL_TIMEOUT - (time.perf_counter() - started)
+        return AI_TOTAL_TIMEOUT_SECONDS - (time.perf_counter() - started)
 
     for model_index, model in enumerate(candidates):
         is_fallback = model_index > 0
@@ -244,7 +244,7 @@ async def generate_answer(
         # 전체 예산이 거의 남지 않았으면 폴백을 포기한다 (사용자 대기 시간 보호).
         # 주 모델은 이 가드에서 제외한다. 주 모델까지 걸러버리면 한 번도 호출하지
         # 않은 채 last_code=UNKNOWN 으로 빠져나가 실패 원인이 사라진다.
-        budget = min(AI_TIMEOUT, remaining())
+        budget = min(AI_TIMEOUT_SECONDS, remaining())
         if is_fallback and budget <= MIN_FALLBACK_BUDGET_SECONDS:
             logger.warning(
                 "ai_fallback_skip request_id=%s model=%s reason=no_time_budget",

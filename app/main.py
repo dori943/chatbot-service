@@ -10,9 +10,10 @@ import uvicorn
 
 app = FastAPI()
 app.add_exception_handler(APIError, api_error_handler)
-app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(login_router)
 app.include_router(chat_router)
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 @app.get("/")

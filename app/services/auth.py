@@ -3,6 +3,9 @@ from app.models.login   import Login
 from app.schemas.auth   import AuthRequest
 from app.utils.security import verify_password, hash_password, create_token
 
+def check_user(user_id: str, db: Session) -> bool:
+    return db.get(Login, user_id) is not None
+
 def register(data: AuthRequest, db: Session):
     user = Login(id=data.id, pw=hash_password(data.pw))
 

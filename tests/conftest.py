@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core import dependencies
+from app import db as database_module
 from app.db import Base
 from app.models.chatlog import ChatLog  # noqa: F401 - metadata 등록
 from app.models.login import Login
@@ -20,7 +20,7 @@ def database(monkeypatch):
     with sessions() as db:
         db.add_all([Login(id=name, pw="unused-test-hash") for name in ("alice", "bob", "이건탁")])
         db.commit()
-    monkeypatch.setattr(dependencies, "SessionLocal", sessions)
+    monkeypatch.setattr(database_module, "SessionLocal", sessions)
     monkeypatch.setattr(security, "KEY", "local-test-signing-key-at-least-32-bytes")
     yield sessions
     engine.dispose()

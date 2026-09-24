@@ -106,7 +106,8 @@ async def test_register_login_and_unpaginated_history(database, monkeypatch):
         credentials = {"id": "한글사용자", "pw": "test-only-password"}
         assert (await client.post("/auth/register", json=credentials)).status_code == 200
         failed = await client.post("/auth/login", json={**credentials, "pw": "wrong"})
-        assert failed.json()["message"] == "login failed"
+        assert failed.status_code == 401
+        assert failed.json()["error_code"] == "UNAUTHORIZED"
         response = await client.post("/auth/login", json=credentials)
         assert response.json()["message"] == "login success"
         headers = {"Authorization": f"Bearer {response.json()['token']}"}

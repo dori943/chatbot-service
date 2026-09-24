@@ -1,7 +1,6 @@
 import asyncio
 import time
 import uuid
-import logging
 
 from dataclasses  import dataclass, field
 from functools    import lru_cache
@@ -33,8 +32,7 @@ from app.core.errors import (
     USER_MESSAGES,
 )
 from app.schemas.chat import AIResult
-
-logger = logging.getLogger("app.ai")
+from app.core.logging import log_event
 
 @dataclass
 class PromptPayload:
@@ -158,15 +156,12 @@ def _build_config(payload: PromptPayload, timeout: float) -> Any:
                 thinking_level=AI_THINKING_LEVEL
             )
         except Exception:  # noqa: BLE001
-            logger.warning(
-                "thinking_level=%s 를 이 SDK 버전이 지원하지 않아 무시합니다.",
-                AI_THINKING_LEVEL,
-            )
+            log_event("ai_config_option_ignored")
 
     try:
         return types.GenerateContentConfig(**base, **extra)
-    except TypeError as exc:
-        logger.warning("지원하지 않는 config 옵션이 있어 기본 설정으로 진행합니다: %s", exc)
+    except TypeError:
+        log_event("ai_config_fallback")
         return types.GenerateContentConfig(**base)
 
 
@@ -219,11 +214,13 @@ async def generate_answer(
     if AI_FALLBACK_MODEL and AI_FALLBACK_MODEL != AI_MODEL:
         candidates.append(AI_FALLBACK_MODEL)
 
-    logger.info(
-        "ai_call_start request_id=%s user_id=%s model=%s fallback=%s "
-        "context_turns=%d q_len=%d",
-        request_id, user_id, AI_MODEL, AI_FALLBACK_MODEL,
-        payload.turns_used, len(question),
+    log_event(
+        "ai_call_start",
+        request_id    = request_id,
+        model         = AI_MODEL,
+        fallback      = AI_FALLBACK_MODEL,
+        context_turns = payload.turns_used,
+        q_len         = len(question),
     )
 
     started = time.perf_counter()
@@ -246,29 +243,36 @@ async def generate_answer(
         # 않은 채 last_code=UNKNOWN 으로 빠져나가 실패 원인이 사라진다.
         budget = min(AI_TIMEOUT_SECONDS, remaining())
         if is_fallback and budget <= MIN_FALLBACK_BUDGET_SECONDS:
-            logger.warning(
-                "ai_fallback_skip request_id=%s model=%s reason=no_time_budget",
-                request_id, model,
-            )
+            log_event("ai_fallback_skip", model=model, request_id=request_id)
             break
 
         if is_fallback:
             fallback_attempted = True
-            logger.warning(
-                "ai_fallback_start request_id=%s from=%s to=%s cause=%s",
-                request_id, candidates[0], model, last_code,
+            log_event(
+                "ai_fallback_start",
+                request_id     = request_id,
+                previous_model = candidates[0],
+                model          = model,
+                error_code     = last_code,
             )
 
         for attempt in range(AI_MAX_RETRIES + 1):
+            budget = min(AI_TIMEOUT_SECONDS, remaining())
+            if budget <= 0:
+                last_code = ErrorCode.TIMEOUT
+                break
             try:
                 answer, err_code, usage = await _call_once(model, payload, budget)
 
                 if err_code is None:
-                    logger.info(
-                        "ai_call_success request_id=%s model=%s latency_ms=%d "
-                        "attempt=%d fallback=%s a_len=%d",
-                        request_id, model, elapsed_ms(), attempt + 1,
-                        is_fallback, len(answer or ""),
+                    log_event(
+                        "ai_call_success",
+                        request_id = request_id,
+                        model      = model,
+                        latency_ms = elapsed_ms(),
+                        attempt    = attempt + 1,
+                        fallback   = is_fallback,
+                        a_len      = len(answer or ""),
                     )
                     return AIResult(
                         status="success",
@@ -282,16 +286,23 @@ async def generate_answer(
                     )
 
                 last_code = err_code
-                logger.warning(
-                    "ai_call_fail request_id=%s model=%s error_code=%s attempt=%d",
-                    request_id, model, err_code, attempt + 1,
+                log_event(
+                    "ai_call_fail",
+                    request_id = request_id,
+                    model      = model,
+                    error_code = err_code,
+                    attempt    = attempt + 1,
                 )
 
             except Exception as exc:  # noqa: BLE001 - 어떤 예외도 서버를 죽이지 않는다
                 last_code = _classify(exc)
-                logger.warning(
-                    "ai_call_fail request_id=%s model=%s error_code=%s attempt=%d detail=%r",
-                    request_id, model, last_code, attempt + 1, exc,
+                log_event(
+                    "ai_call_fail",
+                    request_id = request_id,
+                    model      = model,
+                    error_code = last_code,
+                    attempt    = attempt + 1,
+                    exc        = exc,
                 )
 
             # 같은 모델로 재시도할지 판단
@@ -309,9 +320,13 @@ async def generate_answer(
             break
 
     status = "timeout" if last_code == ErrorCode.TIMEOUT else "error"
-    logger.error(
-        "ai_call_giveup request_id=%s model=%s error_code=%s latency_ms=%d fallback=%s",
-        request_id, last_model, last_code, elapsed_ms(), fallback_attempted,
+    log_event(
+        "ai_call_giveup",
+        request_id = request_id,
+        model      = last_model,
+        error_code = last_code,
+        latency_ms = elapsed_ms(),
+        fallback   = fallback_attempted,
     )
     return AIResult(
         status=status,

@@ -2,17 +2,21 @@ import logging
 import time
 import traceback
 
+from asyncio         import CancelledError
 from contextvars     import ContextVar
 from pathlib         import Path
 from uuid            import uuid4
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+# 동시에 처리되는 요청끼리 ID가 섞이지 않도록 요청별 값을 보관한다.
 request_id_context = ContextVar("request_id", default=None)
 logger = logging.getLogger(__name__)
 
 # 로그 레벨과 문구는 이곳에서만 관리한다. 호출부는 이벤트와 필요한 값만 전달한다.
 LOG_EVENTS = {
+    "request_received"           : (logging.INFO,    "method=%(method)s"),
     "request_completed"          : (logging.INFO,    "method=%(method)s route=%(route)s status=%(status)d latency_ms=%(latency_ms)d"),
+    "request_cancelled"          : (logging.INFO,    "method=%(method)s route=%(route)s latency_ms=%(latency_ms)d"),
     "request_failed"             : (logging.WARNING, "status=%(status)d error_code=%(error_code)s"),
     "database_failed"            : (logging.ERROR,   ""),
     "unexpected_error"           : (logging.ERROR,   ""),
@@ -40,13 +44,6 @@ LOG_EVENTS = {
 }
 
 
-class RequestIdFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        if not getattr(record, "request_id", None):
-            record.request_id = request_id_context.get() or "-"
-        return True
-
-
 def exception_location(exc: Exception) -> str:
     return " > ".join(
         f"{Path(frame.f_code.co_filename).name}:{line}:{frame.f_code.co_name}"
@@ -70,7 +67,6 @@ def configure_logging():
     app_logger = logging.getLogger("app")
     if not app_logger.handlers:
         handler = logging.StreamHandler()
-        handler.addFilter(RequestIdFilter())
         handler.setFormatter(logging.Formatter(
             "%(asctime)s %(levelname)s %(filename)s:%(lineno)d request_id=%(request_id)s %(message)s"
         ))
@@ -82,26 +78,39 @@ def configure_logging():
         server_logger.addFilter(ServerExceptionFilter())
 
 
-def log_event(event: str, *, request_id: str | None = None, exc: Exception | None = None, **values):
-    level, template = LOG_EVENTS[event]
-    if event == "request_failed" and values["status"] >= 500:
-        level = logging.ERROR
-
-    message = event
-    if template:
-        message += " " + template % values
+def log_event(
+    event      : str,
+    *,
+    request_id : str | None       = None,
+    exc        : Exception | None = None,
+    **values,
+):
+    try:
+        level, template = LOG_EVENTS[event]
+        if event == "request_failed" and values["status"] >= 500:
+            level = logging.ERROR
+        if not logger.isEnabledFor(level):
+            return
+        message = event
+        if template:
+            message += " " + template % values
+    except (KeyError, TypeError, ValueError):
+        # 로그 인자 실수로 DB 저장이 끝난 요청까지 실패시키지 않는다.
+        level, message = logging.ERROR, f"log_format_error event={event}"
     if exc is not None:
         # 예외 원문·SQL 파라미터·지역 변수 대신 오류 종류와 발생 위치만 기록한다.
         message += f" kind={type(exc).__name__} stack={exception_location(exc)}"
 
     logger.log(
         level, "%s", message,
-        extra={"request_id": request_id or request_id_context.get() or "-"},
-        stacklevel=2,
+        extra      = {"request_id": request_id or request_id_context.get() or "-"},
+        stacklevel = 2,
     )
 
 
 class RequestLoggingMiddleware:
+    """요청 앞뒤에서 ID·응답 헤더·처리 시간을 관리한다."""
+
     def __init__(self, app: ASGIApp):
         self.app = app
 
@@ -115,26 +124,36 @@ class RequestLoggingMiddleware:
         token = request_id_context.set(request_id)
         started = time.perf_counter()
         status_code = 500
+        cancelled = False
 
         async def send_response(message: Message):
             nonlocal status_code
             if message["type"] == "http.response.start":
                 status_code = message["status"]
-                headers = [(key, value) for key, value in message.get("headers", [])
-                           if key.lower() != b"x-request-id"]
+                headers = [
+                    (key, value) for key, value in message.get("headers", [])
+                    if key.lower() != b"x-request-id"
+                ]
                 message["headers"] = headers + [(b"x-request-id", request_id.encode("ascii"))]
             await send(message)
 
         try:
+            # 라우트 매칭 전에는 요청 메서드만 기록한다.
+            log_event("request_received", method=scope["method"])
             await self.app(scope, receive, send_response)
+        except CancelledError:
+            cancelled = True
+            raise
         finally:
             # 경로 원문과 쿼리 문자열에는 입력값이 들어갈 수 있어 라우트 패턴만 기록한다.
             route = getattr(scope.get("route"), "path", "<unmatched>")
-            log_event(
-                "request_completed",
-                method     = scope["method"],
-                route      = route,
-                status     = status_code,
-                latency_ms = int((time.perf_counter() - started) * 1000),
-            )
-            request_id_context.reset(token)
+            try:
+                log_event(
+                    "request_cancelled" if cancelled else "request_completed",
+                    method     = scope["method"],
+                    route      = route,
+                    status     = status_code,
+                    latency_ms = int((time.perf_counter() - started) * 1000),
+                )
+            finally:
+                request_id_context.reset(token)

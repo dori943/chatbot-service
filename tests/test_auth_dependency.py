@@ -1,15 +1,17 @@
-from datetime import datetime, timedelta, timezone
+from datetime               import datetime, timedelta, timezone
+from unittest.mock          import AsyncMock
 
 import jwt
 import pytest
-from fastapi import Depends, FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy.exc import SQLAlchemyError
+from fastapi                import Depends, FastAPI
+from fastapi.testclient     import TestClient
+from sqlalchemy.exc         import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_token_id
-from app.core.errors import APIError, api_error_handler
-from app.services import auth
-from app.utils import security
+from app.core.dependencies  import get_token_id
+from app.core.errors        import APIError, api_error_handler
+from app.services           import auth
+from app.utils              import security
 
 
 @pytest.fixture
@@ -67,10 +69,11 @@ def test_unconfigured_auth_service(client, monkeypatch, auth_headers):
 
 
 def test_database_failure_is_not_an_invalid_login(client, monkeypatch, auth_headers):
-    async def unavailable(*args, **kwargs):
-        raise SQLAlchemyError("test database unavailable")
-
-    monkeypatch.setattr(auth, "check_user", unavailable)
+    monkeypatch.setattr(
+        AsyncSession,
+        "scalar",
+        AsyncMock(side_effect=SQLAlchemyError("test database unavailable")),
+    )
     response = client.get("/protected", headers=auth_headers)
     assert response.status_code == 503
     assert response.json()["error_code"] == "DB_UNAVAILABLE"

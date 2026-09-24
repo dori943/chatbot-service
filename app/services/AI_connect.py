@@ -2,13 +2,13 @@ import asyncio
 import time
 import uuid
 
-from dataclasses  import dataclass, field
-from functools    import lru_cache
-from typing       import Any, Iterable
-from google       import genai
-from google.genai import errors, types
+from dataclasses         import dataclass, field
+from functools           import lru_cache
+from typing              import Any, Iterable
+from google              import genai
+from google.genai        import errors, types
 
-from app.core.config import (
+from app.core.config     import (
     AI_API_KEY,
     AI_MODEL,
     AI_FALLBACK_MODEL,
@@ -23,16 +23,16 @@ from app.core.config import (
     MIN_FALLBACK_BUDGET_SECONDS,
 )
 
-from app.services.prompt import CONTEXT_TRUNCATED_NOTICE, SYSTEM_PROMPT
-
-from app.core.errors import (
+from app.core.errors     import (
     ErrorCode,
     RETRY_SAME_MODEL,
     FALLBACK_TRIGGERS,
     USER_MESSAGES,
 )
-from app.schemas.chat import AIResult
-from app.core.logging import log_event
+from app.core.logging    import log_event
+from app.schemas.chat    import AIResult
+from app.services.prompt import CONTEXT_TRUNCATED_NOTICE, SYSTEM_PROMPT
+
 
 @dataclass
 class PromptPayload:
@@ -41,11 +41,12 @@ class PromptPayload:
     turns_used         : int  = 0
     truncated          : bool = False
 
+
 def build_contents(
     question: str,
     history: Iterable[dict[str, Any]] | None = None,
 ) -> PromptPayload:
-
+    """성공한 대화를 오래된 순서로 받아 최근 턴과 길이 제한을 적용한다."""
     turns: list[dict[str, Any]] = [
         t for t in (history or [])
         if t.get("question") and t.get("answer")
@@ -55,7 +56,8 @@ def build_contents(
     truncated = False
     while turns:
         total = sum(len(t["question"]) + len(t["answer"]) for t in turns)
-        if total + len(question) <= MAX_CONTEXT_CHARS: break
+        if total + len(question) <= MAX_CONTEXT_CHARS:
+            break
         turns.pop(0)
         truncated = True
 
@@ -75,6 +77,7 @@ def build_contents(
         turns_used         = len(turns),
         truncated          = truncated,
     )
+
 
 @lru_cache(maxsize=1)
 def _client() -> genai.Client:
@@ -134,17 +137,17 @@ def _build_config(payload: PromptPayload, timeout: float) -> Any:
     부가 옵션은 실패해도 기본 설정으로 넘어가도록 방어한다.
     """
     base = dict(
-        system_instruction=payload.system_instruction,
-        temperature=AI_TEMPERATURE,
-        max_output_tokens=AI_MAX_TOKENS,
-        http_options=types.HttpOptions(timeout=int(timeout * 1000)),  # ms
+        system_instruction = payload.system_instruction,
+        temperature        = AI_TEMPERATURE,
+        max_output_tokens  = AI_MAX_TOKENS,
+        http_options       = types.HttpOptions(timeout=int(timeout * 1000)),  # ms
     )
     extra: dict[str, Any] = {}
 
     # 함수 호출(AFC)은 쓰지 않는다 — 경고 제거 + 불필요한 왕복 방지
     try:
         extra["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
-            disable=True
+            disable = True
         )
     except Exception:  # noqa: BLE001 - 구버전 SDK
         pass
@@ -153,7 +156,7 @@ def _build_config(payload: PromptPayload, timeout: float) -> Any:
     if AI_THINKING_LEVEL:
         try:
             extra["thinking_config"] = types.ThinkingConfig(
-                thinking_level=AI_THINKING_LEVEL
+                thinking_level = AI_THINKING_LEVEL
             )
         except Exception:  # noqa: BLE001
             log_event("ai_config_option_ignored")
@@ -179,17 +182,18 @@ async def _call_once(
 
     response = await asyncio.wait_for(
         _client().aio.models.generate_content(
-            model=model,
-            contents=payload.contents,
-            config=config,
+            model    = model,
+            contents = payload.contents,
+            config   = config,
         ),
-        timeout=timeout,
+        timeout = timeout,
     )
 
     text, err = _extract_answer(response)
     if err:
         return None, err, getattr(response, "usage_metadata", None)
     return text, None, getattr(response, "usage_metadata", None)
+
 
 async def generate_answer(
     question: str,
@@ -198,17 +202,13 @@ async def generate_answer(
     user_id: str | None = None,
     request_id: str | None = None,
 ) -> AIResult:
-    """질문 + 이전 대화로 AI 응답을 생성한다.
+    """기존 재시도·폴백 정책으로 AI 응답을 생성한다.
 
-    흐름:
-        주 모델 시도 → (일시적 실패면 1회 재시도) → 실패하면 폴백 모델 1회 시도
-
-    이 함수는 **어떤 경우에도 예외를 던지지 않는다.**
-    실패는 AIResult.status 로 표현되며, 라우터는 status 를 보고
-    HTTP 상태코드와 사용자 안내 문구를 정하면 된다.
+    AI 호출 실패는 AIResult로 반환하고, 작업 취소는 호출자에게 전달한다.
+    입력 검증·DB 저장·HTTP 오류 변환은 chat_main에서 처리한다.
     """
     request_id = request_id or uuid.uuid4().hex[:12]
-    payload = build_contents(question, history)
+    payload    = build_contents(question, history)
 
     candidates = [AI_MODEL]
     if AI_FALLBACK_MODEL and AI_FALLBACK_MODEL != AI_MODEL:
@@ -223,9 +223,9 @@ async def generate_answer(
         q_len         = len(question),
     )
 
-    started = time.perf_counter()
-    last_code = ErrorCode.UNKNOWN
-    last_model = AI_MODEL
+    started            = time.perf_counter()
+    last_code          = ErrorCode.UNKNOWN
+    last_model         = AI_MODEL
     fallback_attempted = False
 
     def elapsed_ms() -> int:
@@ -236,11 +236,9 @@ async def generate_answer(
 
     for model_index, model in enumerate(candidates):
         is_fallback = model_index > 0
-        last_model = model
+        last_model  = model
 
-        # 전체 예산이 거의 남지 않았으면 폴백을 포기한다 (사용자 대기 시간 보호).
-        # 주 모델은 이 가드에서 제외한다. 주 모델까지 걸러버리면 한 번도 호출하지
-        # 않은 채 last_code=UNKNOWN 으로 빠져나가 실패 원인이 사라진다.
+        # 주 모델은 시도하되, 폴백을 수행할 시간이 부족하면 이전 실패를 유지한다.
         budget = min(AI_TIMEOUT_SECONDS, remaining())
         if is_fallback and budget <= MIN_FALLBACK_BUDGET_SECONDS:
             log_event("ai_fallback_skip", model=model, request_id=request_id)
@@ -257,10 +255,6 @@ async def generate_answer(
             )
 
         for attempt in range(AI_MAX_RETRIES + 1):
-            budget = min(AI_TIMEOUT_SECONDS, remaining())
-            if budget <= 0:
-                last_code = ErrorCode.TIMEOUT
-                break
             try:
                 answer, err_code, usage = await _call_once(model, payload, budget)
 
@@ -275,14 +269,14 @@ async def generate_answer(
                         a_len      = len(answer or ""),
                     )
                     return AIResult(
-                        status="success",
-                        request_id=request_id,
-                        model=model,
-                        latency_ms=elapsed_ms(),
-                        answer=answer,
-                        prompt_tokens=getattr(usage, "prompt_token_count", None),
-                        completion_tokens=getattr(usage, "candidates_token_count", None),
-                        fallback_used=is_fallback,
+                        status            = "success",
+                        request_id        = request_id,
+                        model             = model,
+                        latency_ms        = elapsed_ms(),
+                        answer            = answer,
+                        prompt_tokens     = getattr(usage, "prompt_token_count", None),
+                        completion_tokens = getattr(usage, "candidates_token_count", None),
+                        fallback_used     = is_fallback,
                     )
 
                 last_code = err_code
@@ -294,7 +288,7 @@ async def generate_answer(
                     attempt    = attempt + 1,
                 )
 
-            except Exception as exc:  # noqa: BLE001 - 어떤 예외도 서버를 죽이지 않는다
+            except Exception as exc:
                 last_code = _classify(exc)
                 log_event(
                     "ai_call_fail",
@@ -329,11 +323,11 @@ async def generate_answer(
         fallback   = fallback_attempted,
     )
     return AIResult(
-        status=status,
-        request_id=request_id,
-        model=last_model,
-        latency_ms=elapsed_ms(),
-        error_code=last_code,
-        user_message=USER_MESSAGES.get(last_code, USER_MESSAGES[ErrorCode.UNKNOWN]),
-        fallback_used=fallback_attempted,
+        status        = status,
+        request_id    = request_id,
+        model         = last_model,
+        latency_ms    = elapsed_ms(),
+        error_code    = last_code,
+        user_message  = USER_MESSAGES.get(last_code, USER_MESSAGES[ErrorCode.UNKNOWN]),
+        fallback_used = fallback_attempted,
     )

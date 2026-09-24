@@ -1,4 +1,6 @@
-from contextlib import asynccontextmanager
+from contextlib          import asynccontextmanager
+
+import uvicorn
 
 from fastapi             import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -6,16 +8,18 @@ from fastapi.templating  import Jinja2Templates
 from fastapi.exceptions  import RequestValidationError
 from sqlalchemy.exc      import SQLAlchemyError
 
+from app.core.errors     import (
+    APIError,
+    api_error_handler,
+    validation_error_handler,
+    database_error_handler,
+    unexpected_error_handler,
+)
+from app.core.logging    import configure_logging, RequestLoggingMiddleware
+from app.db              import engine
 from app.routers.auth    import router as login_router
 from app.routers.chat    import router as chat_router
-from app.core.errors     import (
-    APIError, api_error_handler, validation_error_handler,
-    database_error_handler, unexpected_error_handler,
-)
-from app.db              import engine
-from app.core.logging    import configure_logging, RequestLoggingMiddleware
 
-import uvicorn
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,14 +43,14 @@ app.include_router(chat_router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+
 @app.get("/")
 def home(request: Request):
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"request": request}
     )
 
 if __name__ == "__main__":
     # 요청 로그는 RequestLoggingMiddleware에서 기록한다.
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, access_log=False)
+    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)

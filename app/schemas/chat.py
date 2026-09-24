@@ -1,6 +1,7 @@
 from pydantic    import BaseModel
 from dataclasses import dataclass
 
+
 class ChatRequest(BaseModel):
     question: str
 
@@ -9,11 +10,11 @@ class ChatRequest(BaseModel):
 class AIResult:
     status            : str                  # "success" | "timeout" | "error"
     request_id        : str
-    model             : str                  # 실제로 응답을 만든(또는 마지막으로 시도한) 모델
+    model             : str                  # AI 처리 결과의 모델명
     latency_ms        : int
     answer            : str | None = None
     error_code        : str | None = None
-    user_message      : str | None = None    
+    user_message      : str | None = None
     prompt_tokens     : int | None = None
     completion_tokens : int | None = None
-    fallback_used     : bool = False         # 폴백 모델이 응답했는지
+    fallback_used     : bool = False          # 폴백 처리에 진입했는지

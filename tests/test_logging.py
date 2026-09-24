@@ -1,18 +1,17 @@
 import asyncio
 import logging
-from unittest.mock import AsyncMock, Mock
+from unittest.mock          import AsyncMock, Mock
 
 import pytest
-from fastapi.testclient import TestClient
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.exc import SQLAlchemyError
+from httpx                  import ASGITransport, AsyncClient
+from sqlalchemy.exc         import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import request_id_context
-from app.main import app
-from app.models.chatlog import ChatLog
-from app.schemas.chat import AIResult
-from app.services import AI_connect, auth
+from app.core.logging       import RequestLoggingMiddleware, log_event, request_id_context
+from app.main               import app
+from app.models.chatlog     import ChatLog
+from app.schemas.chat       import AIResult
+from app.services           import AI_connect, auth
 
 
 @pytest.fixture
@@ -23,12 +22,6 @@ def app_logs(caplog):
         yield caplog
     finally:
         logger.removeHandler(caplog.handler)
-
-
-@pytest.fixture
-def client(database):
-    with TestClient(app, raise_server_exceptions=False) as client:
-        yield client
 
 
 def records(logs):
@@ -44,6 +37,70 @@ def assert_not_logged(logs, *secrets):
     assert all(record.exc_info is None for record in entries)
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("cancelled", [False, True], ids=["completed", "cancelled"])
+async def test_request_received_is_logged_before_downstream_without_reading_body(app_logs, cancelled):
+    scope = {
+        "type"         : "http",
+        "method"       : "POST",
+        "path"         : "/private-request-path",
+        "query_string" : b"private-query=private-query-value",
+        "headers"      : [
+            (b"authorization", b"Bearer private-token"),
+            (b"cookie", b"private-cookie"),
+            (b"x-request-id", b"untrusted-request-id"),
+        ],
+    }
+    receive = AsyncMock(return_value={
+        "type"      : "http.request",
+        "body"      : b"private-request-body",
+        "more_body" : False,
+    })
+    send = AsyncMock()
+
+    async def downstream(scope, receive_request, send_response):
+        entries = records(app_logs)
+        assert len(entries) == 1
+        assert entries[0].getMessage() == "request_received method=POST"
+        assert entries[0].levelno == logging.INFO
+        assert entries[0].request_id == request_id_context.get() == scope["state"]["request_id"]
+        receive.assert_not_awaited()
+        send.assert_not_awaited()
+
+        await receive_request()
+        if cancelled:
+            raise asyncio.CancelledError()
+        await send_response({"type": "http.response.start", "status": 200, "headers": []})
+        assert len(records(app_logs)) == 1
+        await send_response({"type": "http.response.body", "body": b"ok"})
+
+    middleware = RequestLoggingMiddleware(downstream)
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError):
+            await middleware(scope, receive, send)
+    else:
+        await middleware(scope, receive, send)
+
+    entries = records(app_logs)
+    ending = "request_cancelled" if cancelled else "request_completed"
+    assert [entry.getMessage().split()[0] for entry in entries] == ["request_received", ending]
+    request_id = scope["state"]["request_id"]
+    assert len(request_id) == 32
+    assert {entry.request_id for entry in entries} == {request_id}
+    if cancelled:
+        send.assert_not_awaited()
+        assert "status=" not in entries[-1].getMessage()
+    else:
+        headers = dict(send.await_args_list[0].args[0]["headers"])
+        assert headers[b"x-request-id"].decode() == request_id
+    assert request_id_context.get() is None
+    assert_not_logged(
+        app_logs,
+        "private-request-path", "private-query", "private-query-value",
+        "private-token", "private-cookie", "untrusted-request-id", "private-request-body",
+    )
+
+
 def test_chat_request_id_matches_logs_response_and_database(client, database, auth_headers, monkeypatch, app_logs):
     monkeypatch.setattr(AI_connect, "_call_once", AsyncMock(return_value=("private-answer", None, None)))
     response = client.post(
@@ -56,7 +113,10 @@ def test_chat_request_id_matches_logs_response_and_database(client, database, au
     assert len(request_id) == 32
     entries = records(app_logs)
     assert {record.request_id for record in entries} == {request_id}
-    for event in ("ai_call_start", "ai_call_success", "chat_saved", "request_completed"):
+    events = [record.getMessage().split()[0] for record in entries]
+    assert events.count("request_received") == events.count("request_completed") == 1
+    assert events.index("request_received") < events.index("request_completed")
+    for event in ("ai_call_start", "ai_call_success", "chat_saved"):
         assert any(record.getMessage().startswith(event) for record in entries)
     with database() as db:
         assert db.query(ChatLog).one().request_id == request_id
@@ -78,7 +138,11 @@ def test_error_logs_have_request_id_without_sensitive_details(client, monkeypatc
         if kind == "validation":
             payload["id"] = ["private-invalid-id"]
         elif kind == "database":
-            monkeypatch.setattr(AsyncSession, "get", AsyncMock(side_effect=SQLAlchemyError("private-sql-parameters")))
+            monkeypatch.setattr(
+                AsyncSession,
+                "get",
+                AsyncMock(side_effect=SQLAlchemyError("private-sql-parameters")),
+            )
         else:
             def broken_hash(password):
                 raise RuntimeError("private-exception-detail")
@@ -90,6 +154,9 @@ def test_error_logs_have_request_id_without_sensitive_details(client, monkeypatc
     assert request_id == response.headers["X-Request-ID"]
     entries = records(app_logs)
     assert {record.request_id for record in entries} == {request_id}
+    events = [record.getMessage().split()[0] for record in entries]
+    assert events.count("request_received") == events.count("request_completed") == 1
+    assert events.index("request_received") < events.index("request_completed")
     failure = next(record for record in entries if record.getMessage().startswith("request_failed"))
     assert code in failure.getMessage()
     assert failure.levelno == (logging.ERROR if status >= 500 else logging.WARNING)
@@ -99,7 +166,11 @@ def test_error_logs_have_request_id_without_sensitive_details(client, monkeypatc
 
 
 def test_ai_exception_logs_only_error_kind(client, auth_headers, monkeypatch, app_logs):
-    monkeypatch.setattr(AI_connect, "_call_once", AsyncMock(side_effect=RuntimeError("private-provider-body-and-key")))
+    monkeypatch.setattr(
+        AI_connect,
+        "_call_once",
+        AsyncMock(side_effect=RuntimeError("private-provider-body-and-key")),
+    )
     monkeypatch.setattr(AI_connect, "AI_MAX_RETRIES", 0)
     monkeypatch.setattr(AI_connect, "AI_FALLBACK_MODEL", "")
     response = client.post("/api/chat", json={"question": "private-question"}, headers=auth_headers)
@@ -150,9 +221,17 @@ def test_ai_fallback_skip_is_logged(client, auth_headers, monkeypatch, app_logs)
 
 def test_ai_config_fallback_logs_omit_exception_details(monkeypatch, app_logs):
     monkeypatch.setattr(AI_connect, "AI_THINKING_LEVEL", "low")
-    monkeypatch.setattr(AI_connect.types, "ThinkingConfig", Mock(side_effect=TypeError("private-thinking-option")))
+    monkeypatch.setattr(
+        AI_connect.types,
+        "ThinkingConfig",
+        Mock(side_effect=TypeError("private-thinking-option")),
+    )
     config = object()
-    monkeypatch.setattr(AI_connect.types, "GenerateContentConfig", Mock(side_effect=[TypeError("private-config-detail"), config]))
+    monkeypatch.setattr(
+        AI_connect.types,
+        "GenerateContentConfig",
+        Mock(side_effect=[TypeError("private-config-detail"), config]),
+    )
     assert AI_connect._build_config(AI_connect.PromptPayload(), 1) is config
     entries = records(app_logs)
     assert any(record.getMessage().startswith("ai_config_option_ignored") for record in entries)
@@ -190,6 +269,13 @@ def test_server_exception_log_omits_exception_message(caplog):
     assert entry.exc_info is None
 
 
+def test_incorrect_log_arguments_do_not_fail_request_processing(app_logs):
+    log_event("chat_saved", unrelated="private-extra-value")
+    entry = records(app_logs)[0]
+    assert entry.getMessage() == "log_format_error event=chat_saved"
+    assert_not_logged(app_logs, "private-extra-value")
+
+
 @pytest.mark.anyio
 async def test_concurrent_requests_keep_separate_log_contexts(database, auth_headers, monkeypatch, app_logs):
     started = 0
@@ -204,7 +290,13 @@ async def test_concurrent_requests_keep_separate_log_contexts(database, auth_hea
             both_started.set()
         await asyncio.wait_for(both_started.wait(), timeout=5)
         assert request_id_context.get() == observed_ids[question] == kwargs["request_id"]
-        return AIResult(status="success", request_id=kwargs["request_id"], model="test", latency_ms=1, answer="ok")
+        return AIResult(
+            status     = "success",
+            request_id = kwargs["request_id"],
+            model      = "test",
+            latency_ms = 1,
+            answer     = "ok",
+        )
 
     monkeypatch.setattr(AI_connect, "generate_answer", answer)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -218,6 +310,9 @@ async def test_concurrent_requests_keep_separate_log_contexts(database, auth_hea
     assert ids == set(observed_ids.values())
     for request_id in ids:
         entries = [record for record in records(app_logs) if record.request_id == request_id]
-        assert sum(record.getMessage().startswith("request_completed") for record in entries) == 1
+        events = [record.getMessage().split()[0] for record in entries]
+        assert events.count("request_received") == events.count("request_completed") == 1
+        assert events.index("request_received") < events.index("request_completed")
         assert sum(record.getMessage().startswith("chat_saved") for record in entries) == 1
     assert request_id_context.get() is None
+    assert_not_logged(app_logs, *observed_ids.keys(), auth_headers["Authorization"])

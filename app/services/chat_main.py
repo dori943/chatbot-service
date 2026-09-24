@@ -11,6 +11,7 @@ from app.core.logging       import log_event, request_id_context
 from app.schemas.chat       import ChatRequest, AIResult
 from app.services           import chat_db, AI_connect
 
+
 async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
     question   = validate_question(data)
     request_id = request_id_context.get() or uuid4().hex
@@ -25,7 +26,7 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
                 user_id    = user_id,
                 request_id = request_id,
             ),
-            timeout=config.AI_TOTAL_TIMEOUT_SECONDS,
+            timeout = config.AI_TOTAL_TIMEOUT_SECONDS,
         )
         if not isinstance(result, AIResult):
             raise TypeError("Invalid AI result")
@@ -84,15 +85,19 @@ def validate_result(result: AIResult):
         elif len(result.answer) > 5000:
             result.error_code = ErrorCode.ANSWER_TOO_LONG
         else:
-            result.error_code = None
+            result.error_code   = None
             result.user_message = None
             return
     elif result.status not in ("error", "timeout"):
         result.error_code = ErrorCode.UNKNOWN
 
-    result.error_code = result.error_code or (ErrorCode.TIMEOUT if result.status == "timeout" else ErrorCode.UNKNOWN)
-    result.status = "timeout" if result.error_code == ErrorCode.TIMEOUT else "error"
-    result.answer = None
+    if not result.error_code:
+        if result.status == "timeout":
+            result.error_code = ErrorCode.TIMEOUT
+        else:
+            result.error_code = ErrorCode.UNKNOWN
+    result.status       = "timeout" if result.error_code == ErrorCode.TIMEOUT else "error"
+    result.answer       = None
     result.user_message = USER_MESSAGES.get(result.error_code, USER_MESSAGES[ErrorCode.UNKNOWN])
 
 

@@ -1,6 +1,7 @@
-from sqlalchemy import BigInteger, Column, VARCHAR, Integer, ForeignKey
+from sqlalchemy                import BigInteger, Column, VARCHAR, Integer, ForeignKey
 from sqlalchemy.dialects.mysql import DATETIME
-from app.db import Base
+from app.db                    import Base
+
 
 class ChatLog(Base):
     __tablename__ = "chat_logs"

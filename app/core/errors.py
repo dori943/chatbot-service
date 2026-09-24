@@ -4,9 +4,15 @@ from fastapi.responses  import JSONResponse
 from sqlalchemy.exc     import SQLAlchemyError
 from app.core.logging   import log_event
 
+
 class APIError(Exception):
-    def __init__(self, status_code: int, error_code: str, message: str,
-                       request_id : str | None = None):
+    def __init__(
+        self,
+        status_code : int,
+        error_code  : str,
+        message     : str,
+        request_id  : str | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.body        = {
@@ -15,8 +21,12 @@ class APIError(Exception):
             "request_id" : request_id
         }
 
+
 async def api_error_handler(request: Request, exc: APIError):
-    body = {**exc.body, "request_id": getattr(request.state, "request_id", None) or exc.body["request_id"]}
+    body = {
+        **exc.body,
+        "request_id": getattr(request.state, "request_id", None) or exc.body["request_id"],
+    }
     headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else {}
     if body["request_id"]:
         headers["X-Request-ID"] = body["request_id"]
@@ -28,10 +38,12 @@ async def api_error_handler(request: Request, exc: APIError):
     )
     return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
 
+
 async def validation_error_handler(request: Request, exc: RequestValidationError):
     return await api_error_handler(request, APIError(
         422, ErrorCode.INVALID_INPUT, "요청 형식과 입력값을 확인해 주세요.",
     ))
+
 
 async def database_error_handler(request: Request, exc: SQLAlchemyError):
     log_event("database_failed", exc=exc, request_id=getattr(request.state, "request_id", None))
@@ -39,11 +51,13 @@ async def database_error_handler(request: Request, exc: SQLAlchemyError):
         503, ErrorCode.DB_UNAVAILABLE, "데이터베이스 작업을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.",
     ))
 
+
 async def unexpected_error_handler(request: Request, exc: Exception):
     log_event("unexpected_error", exc=exc, request_id=getattr(request.state, "request_id", None))
     return await api_error_handler(request, APIError(
         500, ErrorCode.INTERNAL, "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
     ))
+
 
 class ErrorCode:
     TIMEOUT          = "AI_TIMEOUT"

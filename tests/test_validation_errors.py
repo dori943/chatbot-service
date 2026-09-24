@@ -1,35 +1,14 @@
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock          import AsyncMock
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc         import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import config
-from app.main import app
-from app.models.chatlog import ChatLog
-from app.schemas.chat import AIResult
-from app.services import AI_connect, auth
-
-
-@pytest.fixture
-def client(database):
-    with TestClient(app, raise_server_exceptions=False) as client:
-        yield client
-
-
-@pytest.fixture
-def ai_mock(monkeypatch):
-    async def answer(question, history, **kwargs):
-        return AIResult(
-            status="success", request_id=kwargs["request_id"], model="test-model",
-            latency_ms=1, answer="테스트 답변",
-        )
-
-    mock = AsyncMock(side_effect=answer)
-    monkeypatch.setattr(AI_connect, "generate_answer", mock)
-    return mock
+from app.core               import config
+from app.models.chatlog     import ChatLog
+from app.schemas.chat       import AIResult
+from app.services           import auth
 
 
 @pytest.mark.parametrize("payload", [
@@ -47,7 +26,11 @@ def test_invalid_question_is_rejected_before_ai(client, database, auth_headers, 
 
 
 def test_question_boundary_normalization_and_configured_limit(client, database, auth_headers, ai_mock, monkeypatch):
-    response = client.post("/api/chat", json={"question": "  " + "가" * 5000 + "  ", "user_id": "bob"}, headers=auth_headers)
+    response = client.post(
+        "/api/chat",
+        json    = {"question": "  " + "가" * 5000 + "  ", "user_id": "bob"},
+        headers = auth_headers,
+    )
     assert response.status_code == 200
     assert ai_mock.call_args.kwargs["question"] == "가" * 5000
     with database() as db:
@@ -68,8 +51,13 @@ def test_question_boundary_normalization_and_configured_limit(client, database, 
 def test_ai_failure_is_saved_before_error_response(client, database, auth_headers, ai_mock, code, status, http):
     ai_mock.side_effect = None
     ai_mock.return_value = AIResult(
-        status=status, request_id="provider-id", model="test", latency_ms=1,
-        answer="discard this failed answer", error_code=code, user_message="private-provider-details",
+        status       = status,
+        request_id   = "provider-id",
+        model        = "test",
+        latency_ms   = 1,
+        answer       = "discard this failed answer",
+        error_code   = code,
+        user_message = "private-provider-details",
     )
     response = client.post("/api/chat", json={"question": "hi"}, headers=auth_headers)
     assert response.status_code == http
@@ -86,10 +74,16 @@ def test_ai_failure_is_saved_before_error_response(client, database, auth_header
 @pytest.mark.parametrize("answer,code", [
     (None, "AI_EMPTY_RESPONSE"), (" \n ", "AI_EMPTY_RESPONSE"),
     (123, "AI_EMPTY_RESPONSE"), ("가" * 5001, "AI_ANSWER_TOO_LONG"),
-])
+], ids=["missing", "blank", "wrong-type", "too-long"])
 def test_invalid_ai_answer_is_not_saved_as_success(client, database, auth_headers, ai_mock, answer, code):
     ai_mock.side_effect = None
-    ai_mock.return_value = AIResult(status="success", request_id="test", model="test", latency_ms=1, answer=answer)
+    ai_mock.return_value = AIResult(
+        status     = "success",
+        request_id = "test",
+        model      = "test",
+        latency_ms = 1,
+        answer     = answer,
+    )
     response = client.post("/api/chat", json={"question": "hi"}, headers=auth_headers)
     assert response.status_code == 502
     assert response.json()["error_code"] == code
@@ -146,7 +140,7 @@ def test_history_error_and_response_contract(client, auth_headers, ai_mock, monk
     item = client.get("/api/me/chats", headers=auth_headers).json()[0]
     assert set(item) == {"id", "question", "answer", "status", "created_at"}
     assert item["created_at"].endswith("Z")
-    monkeypatch.setattr(AsyncSession, "scalars", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
+    monkeypatch.setattr(AsyncSession, "execute", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
     response = client.get("/api/me/chats", headers=auth_headers)
     assert response.status_code == 503
     assert response.json()["error_code"] == "DB_UNAVAILABLE"
@@ -195,6 +189,10 @@ def test_auth_database_failure_and_unexpected_error(client, monkeypatch):
 
 
 def test_malformed_json_uses_common_error_format(client, auth_headers):
-    response = client.post("/api/chat", content="{", headers={**auth_headers, "Content-Type": "application/json"})
+    response = client.post(
+        "/api/chat",
+        content = "{",
+        headers = {**auth_headers, "Content-Type": "application/json"},
+    )
     assert response.status_code == 422
     assert response.json()["error_code"] == "INVALID_INPUT"

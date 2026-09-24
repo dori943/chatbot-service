@@ -3,17 +3,17 @@ import os
 import socket
 import threading
 import time
-from unittest.mock import AsyncMock
+from unittest.mock      import AsyncMock
 
 import pytest
 import uvicorn
 
-from app.db import get_db
-from app.main import app
+from app.main           import app
 from app.models.chatlog import ChatLog
-from app.models.login import Login
-from app.services import ai_service, chat as chat_service
-from app.utils import security
+from app.models.login   import Login
+from app.schemas.chat   import AIResult
+from app.services       import AI_connect
+from app.utils          import security
 
 pytestmark = pytest.mark.skipif(os.getenv("RUN_BROWSER_TESTS") != "1", reason="브라우저 테스트는 선택 실행")
 
@@ -21,27 +21,24 @@ pytestmark = pytest.mark.skipif(os.getenv("RUN_BROWSER_TESTS") != "1", reason="�
 def test_login_send_and_owner_switch(database, monkeypatch):
     from playwright.sync_api import sync_playwright, expect
 
-    monkeypatch.setattr(chat_service, "SessionLocal", database)
     with database() as db:
         db.get(Login, "이건탁").pw = security.hash_password("test-only-123")
         db.commit()
 
-    def test_db():
-        with database() as db:
-            yield db
-
     async def answer(question, **kwargs):
-        return ai_service.AIResult(
-            status="success", request_id=kwargs["request_id"], model="browser-test",
-            latency_ms=1, answer="브라우저 통합 테스트 답변",
+        return AIResult(
+            status     = "success",
+            request_id = kwargs["request_id"],
+            model      = "browser-test",
+            latency_ms = 1,
+            answer     = "브라우저 통합 테스트 답변",
         )
 
-    monkeypatch.setattr(ai_service, "generate_answer", AsyncMock(side_effect=answer))
-    app.dependency_overrides[get_db] = test_db
+    monkeypatch.setattr(AI_connect, "generate_answer", AsyncMock(side_effect=answer))
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
+    server = uvicorn.Server(uvicorn.Config(app, log_level="error", log_config=None, access_log=False))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     thread.start()
     try:
@@ -82,4 +79,4 @@ def test_login_send_and_owner_switch(database, monkeypatch):
         server.should_exit = True
         thread.join(timeout=10)
         sock.close()
-        app.dependency_overrides.pop(get_db, None)
+        assert not thread.is_alive(), "Test server did not stop"

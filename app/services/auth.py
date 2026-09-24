@@ -1,3 +1,5 @@
+from pymysql.constants      import ER
+from sqlalchemy             import select
 from sqlalchemy.exc         import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency  import run_in_threadpool
@@ -9,15 +11,16 @@ from app.schemas.auth       import AuthRequest
 from app.utils.security     import verify_password, hash_password, create_token
 from app.utils              import security
 
+
 async def check_user(user_id: str, db: AsyncSession) -> bool:
     try:
-        user = await db.get(Login, user_id)
+        existing_id = await db.scalar(select(Login.id).where(Login.id == user_id))
         await db.commit()
-        return user is not None
+        return existing_id is not None
     except SQLAlchemyError as exc:
         log_event("auth_user_lookup_failed", exc=exc)
         await db.rollback()
-        raise
+        raise APIError(503, ErrorCode.DB_UNAVAILABLE, "로그인 정보를 확인하지 못했습니다.") from None
 
 
 def validate_auth(data: AuthRequest):
@@ -39,20 +42,16 @@ async def register(data: AuthRequest, db: AsyncSession):
     try:
         db.add(user)
         await db.commit()
-    except IntegrityError as exc:
+    except SQLAlchemyError as exc:
         await db.rollback()
-        error_args = getattr(exc.orig, "args", ())
-        if error_args and error_args[0] == 1062:
+        if isinstance(exc, IntegrityError) and exc.orig.args and exc.orig.args[0] == ER.DUP_ENTRY:
             raise APIError(409, ErrorCode.USER_EXISTS, "이미 사용 중인 아이디입니다.") from None
         log_event("auth_register_failed", exc=exc)
-        raise APIError(503, ErrorCode.DB_UNAVAILABLE, "회원가입을 완료하지 못했습니다.") from None
-    except SQLAlchemyError as exc:
-        log_event("auth_register_failed", exc=exc)
-        await db.rollback()
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "회원가입을 완료하지 못했습니다.") from None
 
     log_event("auth_register_success")
     return {"message": "register success"}
+
 
 async def login(data: AuthRequest, db: AsyncSession):
     validate_auth(data)

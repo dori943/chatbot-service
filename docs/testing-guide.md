@@ -1,164 +1,224 @@
-# 팀원용 테스트 가이드
+# 테스트 가이드
 
 | 항목 | 내용 |
 |---|---|
-| 작성자 | 이건탁 |
-| 최초 작성일 | 2026-09-22 |
-| 최종 수정일 | 2026-09-22 |
-| 버전 | v1.0.0 |
-| 대상 브랜치 | feat/lgt-back/chat-integration |
+| 최초 작성자·작성일 | 이건탁 · 2026-09-22 |
+| 최종 수정일 | 2026-09-25 |
+| 대상 브랜치 | `refactor/bsg-back/app-refactoring` |
+| 실행 검증 | 2026-09-25: MySQL·Chromium pytest 114 passed, 1 deselected / JS 11 passed / 오프라인 AI 스모크 3개 시나리오 통과 |
 
-> 문서를 고칠 때는 최종 수정일과 버전을 함께 갱신합니다. 변경 이력은 문서 맨 아래 변경 이력을 참고하세요.
+실행 검증은 모의 AI 응답을 사용했다. 실제 AI 호출 테스트 1개와 외부 배포 환경은 검증 대상에서 제외했다.
+pytest 실행 시 의존 라이브러리의 사용 중단 예정 경고 3건이 발생했으며, 테스트 실패는 없었다.
 
-채팅 통합 브랜치를 각자 로컬에서 검증하는 방법입니다.
-처음이면 **1 → 2 → 3** 순서만 따라도 충분합니다.
-고급 통합 검증(실 MySQL/실 Gemini/브라우저 자동화)은 [chat-integration.md](chat-integration.md)를 참고하세요.
+## 환경 요구사항
 
----
+| 구성 요소 | 사용 범위 |
+|---|---|
+| Python·pip | 백엔드·pytest·AI 스모크 실행. 앱 Docker 이미지 기준 Python 3.12 |
+| `requirements-dev.txt` | 앱 의존성과 pytest·httpx·Playwright·python-dotenv |
+| Docker Desktop | 전용 MySQL 8.0 및 앱 Compose 실행 |
+| Playwright Chromium | 브라우저 통합 테스트 |
+| Node.js | `tests/chat-api.test.mjs` |
 
-## 0. 사전 준비
-
-- Docker Desktop, Python 3.11+, Node 18+ 설치
-- 저장소 루트에서 작업합니다. 예: `C:\dev\7-2\chatbot-service`
-- `.env.example`을 복사해 `.env`를 만들고 값을 채웁니다. **`.env`는 커밋 금지입니다.**
-
-```powershell
-Copy-Item .env.example .env   # 이미 있으면 건너뜁니다(덮어쓰지 마세요)
-```
-
-필요한 값: MySQL 설정(`MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`),
-`SECRET_KEY`, `AI_API_KEY`. 키 값은 팀 채널에서 공유하고 Git에는 올리지 않습니다.
-
----
-
-## 1. 자동 테스트 (실제 AI·DB 사용 안 함, 빠르고 안전)
-
-가상환경에서 실행합니다. 이 단계는 Docker 없이도 됩니다.
+명령 실행 위치는 저장소 루트이며, 셸은 Windows PowerShell 기준이다.
+가상환경 실행 파일을 직접 사용한다. macOS/Linux의 Python 경로는 `.venv/bin/python`이다.
 
 ```powershell
-python -m venv .venv
+if (-not (Test-Path .venv)) { python -m venv .venv }
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
 
-.\.venv\Scripts\python.exe -m pytest tests -q
+## 환경변수와 실행 조건
+
+| 변수 | 조건·용도 |
+|---|---|
+| `MYSQL_TEST_URL` | DB 테스트에 필수. MySQL의 `chatbot_integration_test` 데이터베이스만 허용 |
+| `RUN_BROWSER_TESTS` | 정확히 `1`일 때 브라우저 테스트 실행 |
+| `RUN_LIVE_AI` | 정확히 `1`이고 테스트에 `live_ai` 표시가 있을 때 실제 AI 호출 허용 |
+| `BROWSER_CHANNEL` | 브라우저 채널 지정. 미설정 시 Playwright Chromium 사용 |
+| `AI_API_KEY` | 실제 AI pytest와 스모크의 실제 호출 사례에 필수 |
+| `AI_MODEL`, `AI_FALLBACK_MODEL` | 실제 AI 호출의 주 모델·대체 모델 설정 |
+
+일반 pytest는 `.env`를 자동으로 읽지 않는다. 기본 테스트의 인증 키와 계정은
+`tests/conftest.py`에서 설정하므로 실제 `.env`와 API 키가 필요하지 않다.
+실제 AI pytest의 `.env` 로딩은 별도 실행 명령에 포함된다. AI 스모크는 `.env`를 직접 읽는다.
+
+## 전용 MySQL
+
+| 항목 | 값 |
+|---|---|
+| Compose 파일 | `docker-compose.test.yml` |
+| 프로젝트·서비스 | `chatbot-validation-test` · `db-test` |
+| 접속 주소 | `127.0.0.1:13307` |
+| 데이터베이스 | `chatbot_integration_test` |
+| 저장 방식 | `tmpfs`, 컨테이너 종료 시 데이터 소멸 |
+
+fixture는 **매 테스트 전후 `login`, `chat_logs` 데이터를 삭제**하고 테스트 계정을 준비한다.
+개발 DB를 테스트 대상으로 사용하지 않는다. **같은 테스트 DB를 사용하는 pytest의 동시·병렬 실행은 금지한다.**
+앱의 DB 접근은 `AsyncSession + aiomysql`, fixture의 준비·결과 조회는 동기 드라이버를 사용한다.
+
+```powershell
+docker compose -p chatbot-validation-test -f docker-compose.test.yml up -d --wait db-test
+
+$env:MYSQL_TEST_URL='mysql+pymysql://root:integration-test-only@127.0.0.1:13307/chatbot_integration_test?charset=utf8mb4'
+```
+
+## 검증 명령
+
+### 기본 전체 테스트
+
+전용 MySQL과 Chromium 설치가 실행 조건이다. 실제 AI 테스트는 선택 대상에서 제외한다.
+
+```powershell
+$env:RUN_BROWSER_TESTS='1'
+$env:RUN_LIVE_AI='0'
+
+.\.venv\Scripts\python.exe -B -m pytest tests -m 'not live_ai' -q -p no:cacheprovider
 node --test tests/chat-api.test.mjs
-.\.venv\Scripts\python.exe scripts/ai_smoke_test.py validation limit fallback
 ```
 
-기대 결과:
+### AI 단위 테스트
 
-- `pytest`: **37 passed, 5 skipped** (skip은 환경변수 필요한 통합 테스트라 정상)
-- `node --test`: **11 pass / 0 fail**
-- `ai_smoke_test`: 입력검증·컨텍스트·폴백 **모두 PASS**
-
-> macOS/Linux는 `.\.venv\Scripts\python.exe` 대신 `.venv/bin/python`을 사용합니다.
-
----
-
-## 2. 수동 테스트 (실제 서버 + DB 띄우기)
-
-`app/db.py`가 DB 호스트를 `db`로 사용하므로 **로컬 단독 실행이 아니라 docker compose로** 띄웁니다.
-
-### 2-1. 컨테이너 실행
+DB·브라우저·실제 API 키 없이 실행한다. 외부 AI 호출은 테스트에서 대체한다.
 
 ```powershell
-docker compose up --build -d
-docker compose ps
+.\.venv\Scripts\python.exe -B -m pytest tests/test_ai_connect.py -q -p no:cacheprovider
 ```
 
-`chatbot-db`가 `healthy`, `chatbot-backend`가 `Up` 이면 준비 완료입니다.
-(DB 헬스체크 통과까지 10~20초 걸릴 수 있습니다.)
+### 브라우저 테스트
 
-### 2-2. 초기화 로그 확인
+전용 MySQL과 `MYSQL_TEST_URL`이 필요하다. 테스트는 임의의 로컬 포트에서 Uvicorn을 실행하고
+Chromium → 화면 → API → 테스트 DB 흐름을 검증한다. AI 응답은 모킹한다.
 
 ```powershell
-docker compose logs db | Select-String -Pattern "init.sql|ERROR|ready for connections"
-docker compose logs backend --tail 30
+$env:RUN_BROWSER_TESTS='1'
+.\.venv\Scripts\python.exe -B -m pytest tests/test_browser_integration.py -q -p no:cacheprovider
 ```
 
-`ERROR 1064` 같은 SQL 오류가 없어야 합니다. 있으면 아래 4번 문제해결을 보세요.
+`RUN_BROWSER_TESTS='0'`은 기본 전체 실행에서 브라우저 테스트만 제외한다.
 
-### 2-3. 브라우저에서 확인
+### 실제 AI pytest
 
-- 화면: <http://127.0.0.1:8000>
-- API 문서(Swagger): <http://127.0.0.1:8000/docs>
-
-확인 흐름:
-
-1. **회원가입** — 새 아이디로 가입합니다. (이미 쓴 아이디는 중복 오류가 납니다. 4번 참고)
-2. **로그인** — 로그인하면 상단에 사용자 ID가 표시됩니다.
-3. **질문 전송** — 답변이 표시되고, 로그인한 사용자에게만 본인 기록이 보입니다.
-4. **로그아웃** — 대화가 분리되는지 확인합니다.
-
-### 2-4. 저장된 기록 직접 확인 (선택)
-
-`<root_pw>`는 `.env`의 `MYSQL_ROOT_PASSWORD` 값으로 바꿉니다.
+전용 MySQL·`MYSQL_TEST_URL`·유효한 AI 키가 필요하다. 실제 AI 호출에는 사용량이 발생한다.
+`dotenv run`으로 `.env`를 읽은 뒤 테스트를 실행한다.
 
 ```powershell
-docker exec chatbot-db mysql -uroot -p"<root_pw>" -e "USE chatbot_db; SHOW TABLES; SELECT id FROM login; SELECT id, user_id, status, LEFT(question,20) FROM chat_logs ORDER BY id DESC LIMIT 5;"
+$env:RUN_LIVE_AI='1'
+try {
+    .\.venv\Scripts\python.exe -B -m dotenv run -- .\.venv\Scripts\python.exe -B -m pytest tests/test_live_ai.py -q -p no:cacheprovider
+} finally {
+    $env:RUN_LIVE_AI='0'
+}
 ```
 
-`login`, `chat_logs` 테이블과 방금 만든 계정·기록이 보이면 정상입니다.
+### AI 스모크 스크립트
 
----
+`scripts/ai_smoke_test.py`는 서버·DB 없이 실행되는 독립 스크립트다.
 
-## 3. 정리
+| 인자 | 검증 내용 | 실제 AI 호출 |
+|---|---|---|
+| `basic` | 기본 질문에 대한 성공 응답 | 있음 |
+| `context` | 이전 질문의 문맥 반영 | 있음 |
+| `timeout` | 짧은 호출 제한 시간의 타임아웃 결과 | 있음 |
+| `validation` | 빈 값·타입·길이 오류 거부 | 없음 |
+| `limit` | 문맥 길이·턴 수 출력, 답변 없는 대화 제외 | 없음 |
+| `fallback` | 가짜 실패에 따른 대체 모델 호출·오류 처리 | 없음 |
 
 ```powershell
-docker compose down          # 컨테이너만 정지 (DB 데이터 유지)
-docker compose down -v       # DB 볼륨까지 삭제 (완전 초기화, 데이터 사라짐 주의)
+# 외부 AI 호출 없음
+.\.venv\Scripts\python.exe -B scripts/ai_smoke_test.py validation limit fallback
+
+# 외부 AI 호출 있음
+.\.venv\Scripts\python.exe -B scripts/ai_smoke_test.py basic context
 ```
 
----
+인자 생략 시 여섯 사례를 모두 선택한다. API 키가 없으면 실제 호출 사례를 건너뛴다.
+이 스크립트에는 `--live` 옵션이 없으며 `RUN_LIVE_AI`로 호출을 제한하지 않는다.
+`limit`의 문맥 길이·턴 수는 출력값이고, 통과 판정은 답변 없는 대화의 제외 여부에 적용된다.
 
-## 4. 자주 나오는 문제
+## 검증 범위
 
-### 회원가입 시 "서버 연결에 실패했습니다"
+| 파일 (`tests/`) | 검증 대상 |
+|---|---|
+| `test_auth_dependency.py` | 토큰 누락·만료·위조, 사용자 존재 여부, 인증 설정과 DB 오류 |
+| `test_validation_errors.py` | 입력 경계값, 인증 실패·중복 가입, AI 실패 기록, DB 롤백, 오류 응답 형식 |
+| `test_chat_api.py` | 화면·API 등록, 본인 기록 최신순 조회, 본인의 성공 기록만 문맥에 전달 |
+| `test_async_chat.py` | AI 대기 중 DB 연결 반환, bcrypt 처리 중 다른 요청, 요청 취소, 롤백 후 재사용, DB 엔진 종료 |
+| `test_logging.py` | 앱 처리 전 수신 로그, 요청 ID 연결·동시 요청 분리, 취소와 완료 구분, 민감정보 제외 |
+| `test_ai_connect.py` | 문맥 순서·길이, AI 오류 분류·대체 모델 호출, 호출 시간 초과와 취소 전파 |
+| `test_mysql_integration.py` | 초기 테이블과 ORM 일치, 5,000자·이모지·시간 정밀도, 외래키 제약 |
+| `test_browser_integration.py` | 게스트 전송 차단, 로그인·질문·답변 표시·DB 저장·로그아웃 |
+| `test_live_ai.py` | 실제 AI 응답과 테스트 DB 저장·조회 |
+| `chat-api.test.mjs` | 토큰·질문 전송, 오류 안내, 취소와 시간 초과 구분 |
 
-대부분 **연결 문제가 아니라 이미 존재하는 아이디**입니다.
-현재 회원가입은 중복 아이디를 곱게 처리하지 못해 500이 나고, 화면은 이를 위 메시지로 표시합니다.
+화면 대화방은 브라우저 저장소 기능이다. 서버 대화방 CRUD와 화면·서버 기록 동기화는 검증 범위에 포함되지 않는다.
 
-- 해결: **새 아이디로 가입**하거나 **기존 아이디로 로그인**하세요.
-- 확실히 하려면 `docker compose logs backend --tail 20`에서
-  `Duplicate entry ... for key 'login.PRIMARY'`를 확인합니다.
+## 실제 Compose 웹 검증
 
-### DB가 바로 죽음 / `chatbot-db` `Exited (1)`
-
-`init.sql` 문법 오류로 초기화에 실패하면 컨테이너가 종료됩니다.
-MySQL은 데이터 디렉터리가 비어있지 않으면 `init.sql`을 다시 실행하지 않으므로,
-초기화가 한 번 실패한 볼륨은 그냥 재시작해도 테이블이 생기지 않습니다.
-
-- 해결: 남길 데이터가 없다면 완전 초기화합니다.
+앱의 `.env`에 DB·인증·AI 설정이 필요하며 실제 질문은 외부 AI를 호출한다.
 
 ```powershell
-docker compose down -v
-docker compose up --build -d
+docker compose up --build -d --wait
 ```
 
-- 남길 데이터가 있으면 지우지 말고 [chat-integration.md](chat-integration.md)의 기존 DB 반영 절차를 따르세요.
+| 대상 | 주소 |
+|---|---|
+| 웹 화면 | <http://127.0.0.1:8000> |
+| API 문서 | <http://127.0.0.1:8000/docs> |
 
-### backend가 재시작 반복 / 모듈 없음(`No module named ...`)
+| 입력·작업 | 판정 조건 |
+|---|---|
+| 게스트 질문 전송 | 로그인 안내 표시, 채팅 요청 미전송 |
+| 회원가입·로그인 | HTTP 200, 사용자 ID 표시 |
+| 로그인 후 질문 전송 | HTTP 200, `answer`, `request_id`, `created_at` 반환 및 답변 표시 |
+| 채팅 응답 비교 | 본문의 `request_id`와 응답 헤더 `X-Request-ID` 일치 |
+| `/docs`에서 로그인 토큰으로 `GET /api/me/chats` 호출 | 본인 기록만 조회, 성공 기록의 `status`는 `success` |
+| 로그아웃 | 사용자 ID와 해당 계정의 화면 대화 숨김 |
+| 브라우저 Console | JavaScript 실행 오류 없음 |
 
-오래된 이미지일 수 있습니다. `--build`로 다시 빌드하세요.
+화면은 기록 조회 API를 호출하지 않으므로 API 검증을 별도로 수행한다.
+
+### 로그·저장 기록 조회
 
 ```powershell
-docker compose up --build -d
+docker compose logs -f backend
+docker compose exec db mysql -uroot -p
 ```
 
-### 채팅은 되는데 AI 오류가 남
+SQL 조회 대상은 `.env`의 `MYSQL_DATABASE`에 지정된 DB다.
+`scripts/check_logs.sql`은 테이블 구조, 대화 기록, 오류·응답 시간 집계를 조회한다.
+쿼리의 사용자 ID와 요청 ID는 검증 대상 값으로 지정한다.
+서버 로그와 저장 기록의 연결 키는 `request_id`다.
 
-`.env`의 `AI_API_KEY`와 모델 설정을 확인합니다. 오류 코드별 의미는 [README](../README.md)의 오류 표를 참고하세요.
+## 판정 조건
 
----
+| 결과 | 의미 |
+|---|---|
+| pytest 종료 코드 `0`, 필수 테스트 실행, 실패·수집 오류 없음 | 선택한 범위 통과 |
+| `MYSQL_TEST_URL` 미설정에 따른 `skipped` | DB 검증 미실시 |
+| `RUN_BROWSER_TESTS`가 `1`이 아닌 경우의 `skipped` | 브라우저 검증 미실시 |
+| `RUN_LIVE_AI`가 `1`이 아닌 경우의 `skipped` | 실제 AI pytest 미실시 |
+| `-m 'not live_ai'`의 `deselected` | 실제 AI 테스트를 선택 대상에서 제외 |
+| JS 테스트의 실패 `0`, 종료 코드 `0` | 요청 유틸리티 검증 통과 |
+| AI 스모크의 선택한 사례 `PASS`, 종료 코드 `0` | 선택한 스모크 범위 통과. 건너뛴 사례는 미검증 |
 
-## 다음 단계
+DB 접속 실패 확인 항목은 Docker 실행 상태, `db-test` 상태, 13307 포트 충돌이다.
+실제 AI 호출이 기본 pytest에서 차단되면 해당 테스트의 AI 모킹을 확인한다.
 
-실 MySQL 정합성, 실제 Gemini 호출, 브라우저 자동화(Playwright)까지 검증하려면
-[chat-integration.md](chat-integration.md)를 참고하세요.
+## 종료 절차
 
----
+성공·실패 여부와 관계없이 동일한 프로젝트 이름과 Compose 파일로 전용 테스트 DB를 종료한다.
 
-## 변경 이력
+```powershell
+docker compose -p chatbot-validation-test -f docker-compose.test.yml down
+Remove-Item Env:MYSQL_TEST_URL, Env:RUN_BROWSER_TESTS, Env:RUN_LIVE_AI -ErrorAction SilentlyContinue
+```
 
-| 버전 | 날짜 | 작성자 | 내용 |
-|---|---|---|---|
-| v1.0.0 | 2026-09-22 | 이건탁 | 최초 작성. 자동 테스트·수동 브라우저 테스트·문제해결 정리 |
+종료 대상은 전용 테스트 프로젝트이며 앱 Compose와 개발 DB는 포함하지 않는다.
+fixture 종료 후 테스트 기록이 없는 것은 정상이다.
+
+## 관련 문서
+
+- [리팩터링 문서](refactoring.md)
+- [API 명세와 앱 실행](../README.md)

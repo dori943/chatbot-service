@@ -1,4 +1,4 @@
-from os import getenv
+from os                     import getenv
 
 from sqlalchemy.engine      import URL
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker

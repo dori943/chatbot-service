@@ -3,17 +3,21 @@ import os
 import subprocess
 import sys
 import threading
-from datetime import datetime, timezone
+from datetime           import datetime, timezone
+from types              import SimpleNamespace
+from unittest.mock      import AsyncMock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx              import ASGITransport, AsyncClient
 
-from app import db as database_module
-from app.db import get_db
-from app.main import app
+from app                import db as database_module
+from app                import main as main_module
+from app.core.logging   import request_id_context
+from app.db             import get_db
+from app.main           import app
 from app.models.chatlog import ChatLog
-from app.schemas.chat import AIResult
-from app.services import AI_connect, auth, chat_db
+from app.schemas.chat   import AIResult
+from app.services       import AI_connect, auth, chat_db
 
 
 @pytest.mark.anyio
@@ -33,8 +37,11 @@ async def test_chat_releases_db_while_waiting_and_returns_saved_timestamp(databa
         started.set()
         await release.wait()
         return AIResult(
-            status="success", request_id="async-chat-test", model="test-model",
-            latency_ms=1, answer="테스트 답변",
+            status     = "success",
+            request_id = "async-chat-test",
+            model      = "test-model",
+            latency_ms = 1,
+            answer     = "테스트 답변",
         )
 
     monkeypatch.setattr(AI_connect, "generate_answer", answer)
@@ -47,7 +54,10 @@ async def test_chat_releases_db_while_waiting_and_returns_saved_timestamp(databa
             try:
                 await asyncio.wait_for(started.wait(), timeout=5)
                 assert not sessions[0].in_transaction()
-                response = await asyncio.wait_for(client.get("/api/me/chats", headers=auth_headers), timeout=5)
+                response = await asyncio.wait_for(client.get(
+                    "/api/me/chats",
+                    headers = auth_headers,
+                ), timeout=5)
                 assert response.status_code == 200
                 assert response.json() == []
             finally:
@@ -84,7 +94,10 @@ async def test_password_hashing_allows_other_requests_to_progress(database, auth
 
     monkeypatch.setattr(auth, "hash_password", slow_hash)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        pending = asyncio.create_task(client.post("/auth/register", json={"id": "new-user", "pw": "test-password"}))
+        pending = asyncio.create_task(client.post(
+            "/auth/register",
+            json = {"id": "new-user", "pw": "test-password"},
+        ))
         try:
             await asyncio.wait_for(started.wait(), timeout=5)
             response = await asyncio.wait_for(client.get("/api/me/chats", headers=auth_headers), timeout=5)
@@ -99,7 +112,13 @@ async def test_password_hashing_allows_other_requests_to_progress(database, auth
 @pytest.mark.anyio
 async def test_register_login_and_unpaginated_history(database, monkeypatch):
     async def answer(question, history, **kwargs):
-        return AIResult(status="success", request_id=question, model="test", latency_ms=1, answer=question)
+        return AIResult(
+            status     = "success",
+            request_id = question,
+            model      = "test",
+            latency_ms = 1,
+            answer     = question,
+        )
 
     monkeypatch.setattr(AI_connect, "generate_answer", answer)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -121,17 +140,23 @@ async def test_register_login_and_unpaginated_history(database, monkeypatch):
 @pytest.mark.anyio
 async def test_history_failure_rolls_back_before_reusing_session(database, monkeypatch):
     async with database_module.SessionLocal() as db:
-        original = db.scalars
+        original = db.execute
 
         async def fail_query(*args, **kwargs):
             from sqlalchemy import text
-            await db.execute(text("SELECT * FROM missing_test_table"))
+            await original(text("SELECT * FROM missing_test_table"))
 
-        monkeypatch.setattr(db, "scalars", fail_query)
+        monkeypatch.setattr(db, "execute", fail_query)
         assert await chat_db.get_history("alice", db) == []
         assert not db.in_transaction()
-        monkeypatch.setattr(db, "scalars", original)
-        result = AIResult(status="success", request_id="after-rollback", model="test", latency_ms=1, answer="ok")
+        monkeypatch.setattr(db, "execute", original)
+        result = AIResult(
+            status     = "success",
+            request_id = "after-rollback",
+            model      = "test",
+            latency_ms = 1,
+            answer     = "ok",
+        )
         await chat_db.save_result(db, "alice", "question", result)
         assert len(await chat_db.get_list_chat("alice", db)) == 1
 
@@ -145,3 +170,57 @@ def test_timeout_environment_names():
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.anyio
+async def test_cancelled_request_releases_session_without_saving_failure(database, auth_headers, monkeypatch):
+    started = asyncio.Event()
+    sessions = []
+
+    async def test_db():
+        async with database_module.SessionLocal() as db:
+            sessions.append(db)
+            yield db
+
+    async def answer(**kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(AI_connect, "generate_answer", answer)
+    app.dependency_overrides[get_db] = test_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            async def send():
+                try:
+                    return await client.post(
+                        "/api/chat",
+                        json    = {"question": "cancelled"},
+                        headers = auth_headers,
+                    )
+                finally:
+                    assert request_id_context.get() is None
+
+            pending = asyncio.create_task(send())
+            try:
+                await asyncio.wait_for(started.wait(), timeout=5)
+            finally:
+                pending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+            assert not sessions[0].in_transaction()
+            response = await client.get("/api/me/chats", headers=auth_headers)
+            assert response.status_code == 200
+            assert response.json() == []
+        with database() as db:
+            assert db.query(ChatLog).count() == 0
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.mark.anyio
+async def test_lifespan_disposes_database(monkeypatch):
+    dispose = AsyncMock()
+    monkeypatch.setattr(main_module, "engine", SimpleNamespace(dispose=dispose))
+    async with main_module.lifespan(app):
+        pass
+    dispose.assert_awaited_once()

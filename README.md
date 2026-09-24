@@ -1,95 +1,100 @@
-# chatbot-service (작성중)
+# chatbot-service ( 작성중 )
 
-FastAPI에서 화면과 API를 함께 제공하는 AI 챗봇입니다.
+FastAPI에서 화면과 API를 함께 제공하는 AI 챗봇입니다. 회원가입·로그인, 질문·답변,
+성공·실패 기록 저장, 본인 기록 조회와 사용자별 최근 대화 문맥을 제공합니다.
+
+- [테스트 가이드](docs/testing-guide.md): MySQL·브라우저·오프라인 AI 검증 실행 방법
+- [develop 대비 리팩터링](docs/refactoring.md): 폴더별 책임과 백엔드·프론트엔드·AI 변경 범위
 
 ## 실행
 
-1. `.env.example`을 참고해 `.env`를 준비합니다. 기존 `.env`는 덮어쓰지 않습니다.
-2. MySQL 설정, `SECRET_KEY`, `AI_API_KEY`를 입력합니다. 키는 Git에 올리지 않습니다.
-3. 기존 DB 볼륨이 있다면 아래 스키마 안내를 먼저 확인합니다.
-4. 프로젝트 루트에서 실행합니다.
+1. `.env`가 없으면 `.env.example`을 복사합니다. 기존 파일은 유지합니다.
+2. MySQL 설정, `SECRET_KEY`, `AI_API_KEY`를 입력합니다.
+3. 프로젝트 루트에서 실행합니다.
 
 ```sh
-docker compose up --build -d
+docker compose up --build -d --wait
 docker compose ps
-docker compose logs --tail 50 backend
+docker compose logs -f backend
 ```
 
-화면: http://127.0.0.1:8000 / API 문서: http://127.0.0.1:8000/docs
+화면: <http://127.0.0.1:8000> / API 문서: <http://127.0.0.1:8000/docs>
 
-회원가입 후 로그인하고 질문을 전송합니다. 화면과 API가 같은 서버에 있으므로
-별도의 프론트 서버 없이 동작합니다.
+앱의 DB 호스트는 Compose 서비스 이름인 `db`입니다. `.env`는 Compose가 주입하며,
+일반 앱 실행 시 Python이 직접 읽지 않습니다. 인증 토큰 유효기간은 현재 60분입니다.
+
+`data/init.sql`은 빈 MySQL 데이터 디렉터리를 처음 만들 때만 실행됩니다.
+기존 볼륨은 재빌드·재시작으로 초기화되지 않으며, 이번 리팩터링에 따른 스키마 변경은 없습니다.
+자동 테스트는 개발 DB와 별도인 전용 MySQL을 사용합니다.
 
 ## API
 
-| 메서드 | 경로 | 동작 | 인증 |
+| 메서드 | 경로 | 요청·응답 | 인증 |
 |---|---|---|---|
-| POST | `/auth/register` | `{ "id": "...", "pw": "..." }` 회원가입 | 없음 |
-| POST | `/auth/login` | 같은 형식으로 로그인, 성공 시 `token` 반환 | 없음 |
-| POST | `/api/chat` | 질문 전송, AI 응답 및 성공·실패 기록 저장 | Bearer 토큰 |
-| GET | `/api/me/chats?limit=50&offset=0` | 본인 기록 조회, 최신순 | Bearer 토큰 |
+| POST | `/auth/register` | `{ "id": "...", "pw": "..." }` → 성공 메시지 | 없음 |
+| POST | `/auth/login` | 같은 요청 → `message`, `token`, `token_type` | 없음 |
+| POST | `/api/chat` | `{ "question": "..." }` → `answer`, `request_id`, `created_at` | Bearer 토큰 |
+| GET | `/api/me/chats` | 본인 전체 기록 배열, 최신순 | Bearer 토큰 |
 
-채팅 요청 헤더: `Authorization: Bearer <로그인 응답의 token>`
+채팅 인증 헤더는 `Authorization: Bearer <로그인 응답의 token>`입니다.
+사용자 ID는 토큰에서 가져옵니다. 요청에 추가한 `user_id` 등 정의되지 않은 필드는 무시합니다.
 
-요청:
-
-```json
-{ "question": "FastAPI가 뭐야?" }
-```
-
-성공 응답 (`200`):
+채팅 성공 응답은 HTTP 200입니다.
 
 ```json
 {
   "answer": "FastAPI는 파이썬으로 API를 만드는 프레임워크입니다.",
   "request_id": "요청별 식별자",
-  "created_at": "2026-09-22T07:00:00Z"
+  "created_at": "2026-09-24T07:00:00Z"
 }
 ```
 
-기록 응답은 `{ "items": [...], "total": 0 }` 형식이며 각 항목은
-`id`, `question`, `answer`, `status`, `created_at`을 포함합니다.
-`total`은 본인의 전체 기록 수입니다. `limit`은 1~100, `offset`은 0 이상입니다.
-사용자 ID는 요청 본문이 아닌 검증된 로그인 토큰에서 가져옵니다.
+기록 조회는 `[{ "id": 1, "question": "...", "answer": "...", "status": "success", "created_at": "...Z" }]`
+형식입니다. 실패 기록의 `answer`는 `null`입니다. 페이지네이션과 `items`·`total` 래핑은 사용하지 않습니다.
 
-오류는 `{ "error_code": "...", "message": "한국어 안내", "request_id": null }` 형식입니다.
-AI 호출 후 오류에는 요청 식별자가 포함됩니다.
+인증·입력 검증·서비스 오류는 다음 형식으로 반환합니다. 같은 요청의 ID는 응답 헤더
+`X-Request-ID`, 서버 로그, 저장된 채팅 기록에 연결됩니다.
 
-| 상태 | 대표 오류 |
+```json
+{ "error_code": "UNAUTHORIZED", "message": "로그인이 필요합니다. 다시 로그인해 주세요.", "request_id": "요청별 식별자" }
+```
+
+| HTTP | 대표 오류 |
 |---|---|
-| 401 | `UNAUTHORIZED`: 토큰 누락·만료·위조, 존재하지 않는 사용자 |
-| 422 | `INVALID_INPUT`: 요청 검증 실패 / `AI_BLOCKED`: AI 안전 필터 차단 |
+| 401 | `UNAUTHORIZED`: 로그인 실패, 토큰 누락·만료·위조, 존재하지 않는 사용자 |
+| 409 | `USER_ALREADY_EXISTS`: 중복 회원가입 |
+| 422 | `INVALID_INPUT`: 요청 검증 실패 / `AI_BLOCKED`: AI 차단 |
 | 429 | `AI_RATE_LIMIT`: AI 요청 제한 |
+| 500 | `INTERNAL_ERROR`: 처리하지 못한 내부 오류 |
 | 502 | AI 연결·응답 오류, `AI_ANSWER_TOO_LONG` 등 |
-| 503 | `DB_UNAVAILABLE`: DB 조회·저장 실패 / `AUTH_UNAVAILABLE`: 인증 설정 누락 |
+| 503 | `DB_UNAVAILABLE`: DB 실패 / `AUTH_UNAVAILABLE`: 인증 설정·저장된 인증 정보 문제 |
 | 504 | `AI_TIMEOUT`: AI 응답 시간 초과 |
 
-## 데이터 및 현재 범위
+404·405 등 프레임워크가 직접 반환하는 HTTP 오류는 기본 `detail` 형식입니다.
+내용 검증 규칙은 서비스에 있으므로 Swagger 스키마에는 타입 중심으로 표시됩니다.
 
-- SQL과 ORM의 테이블 이름은 `chat_logs`, 질문·답변은 모두 `VARCHAR(5000)`입니다.
-- 질문은 필수, 실패한 AI 답변은 `NULL`입니다. 생성 시각은 DB에 UTC로 저장하고 API에서는 `Z`로 반환합니다.
-- 프론트·요청 스키마의 질문 한도는 5,000자입니다. `MAX_QUESTION_LENGTH`를 더 작게 설정하면 AI 호출 전 해당 한도도 적용됩니다.
-- AI 답변이 5,000자를 넘으면 자르지 않고 `AI_ANSWER_TOO_LONG` 실패 기록을 저장합니다.
-- 입력·인증 검증 실패는 AI를 호출하지 않으며 채팅 기록을 만들지 않습니다.
-- DB 저장 실패는 503으로 알립니다. 이때 AI 답변은 생성됐더라도 기록이 저장되지 않을 수 있습니다.
-- 이번 API는 질문별 응답입니다. 대화방 ID가 없어 이전 기록을 AI 문맥으로 자동 연결하지 않습니다.
-- 화면의 대화 목록·삭제는 기존 브라우저 저장소 동작을 유지합니다. DB 기록 조회는 `/api/me/chats`에서 제공하며 화면 동기화·서버 삭제는 후속 작업입니다.
-- 화면의 중지 버튼은 응답 대기를 취소합니다. 이미 시작된 서버 처리·기록 저장까지 취소됨을 보장하지 않습니다.
+## 현재 동작 범위
 
-`init.sql`은 빈 MySQL 데이터 디렉터리에서 최초 한 번만 실행됩니다.
-기존 볼륨에는 소스 변경이 자동 적용되지 않습니다.
-[기존 DB 반영 및 검증 방법](docs/chat-integration.md)을 확인하세요.
+- 질문은 앞뒤 공백을 제거한 뒤 `min(MAX_QUESTION_LENGTH, 5000)`자까지 허용합니다.
+- AI 답변이 비었거나 5,000자를 넘으면 실패 기록을 저장하고 오류를 반환합니다. 답변을 잘라 저장하지 않습니다.
+- 인증·입력 검증 실패는 AI를 호출하거나 채팅 기록을 만들지 않습니다. DB 저장 실패는 503입니다.
+- DB 시각은 UTC이며 API에서는 `Z`를 붙여 반환합니다.
+- AI 문맥은 **같은 사용자의 최근 성공 대화**입니다. 기본 5턴에서 길이에 따라 오래된 대화를 더 제외합니다.
+- 화면의 대화방 생성·삭제는 브라우저 저장소에서 동작합니다. 서버에 대화방 CRUD는 없으며 새 방을 만들어도 서버 문맥이 초기화되지 않습니다.
+- 화면은 DB 기록 조회 API와 동기화되지 않습니다. 중지 버튼은 브라우저의 응답 대기를 취소하며 서버 처리 취소까지 보장하지 않습니다.
 
 ## 테스트
 
-가상환경의 Python에서 실행합니다. 기본 테스트는 실제 AI나 개발 DB를 사용하지 않습니다.
+기본 pytest는 실제 AI를 호출하지 않습니다. API·DB 테스트는 별도 MySQL 컨테이너를 사용합니다.
+전용 DB를 지정하지 않으면 해당 테스트는 건너뛰므로 [테스트 가이드](docs/testing-guide.md)의 전체 실행 절차를 따르세요.
 
 ```sh
-python -m pip install -r requirements-dev.txt
-python -m pytest tests -q
-node --test tests/chat-api.test.mjs
 python scripts/ai_smoke_test.py validation limit fallback
+node --test tests/chat-api.test.mjs
 ```
 
-처음이면 [팀원용 테스트 가이드](docs/testing-guide.md)를 따라 자동 테스트와 수동 브라우저 테스트를 진행하세요.
-MySQL·브라우저·실제 Gemini 호출 검증은 [통합 테스트 안내](docs/chat-integration.md)를 참고하세요.
+스모크는 기존 여섯 사례를 직접 실행합니다. 인자 없이 실행하면 API 키가 있는 경우
+실제 AI 호출도 포함하므로, 오프라인 검증에는 위처럼 사례를 지정합니다.
+2026-09-25 검증 결과: 전용 MySQL·Chromium을 포함한 pytest 114개, JS 테스트 11개,
+오프라인 AI 스모크 3개 시나리오가 통과했습니다. 실제 AI 호출 테스트 1개는 제외했으며,
+외부 배포 환경은 이번 검증에 포함하지 않았습니다.

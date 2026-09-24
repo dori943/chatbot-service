@@ -1,7 +1,6 @@
 """AI 서비스 단독 테스트 스크립트 (Google Gemini).
 
-DB도, FastAPI도, 도커도 없이 ai_service.py 만 검증한다.
-백엔드 작업이 끝나기 전에 AI 파이프라인을 완성하기 위한 도구.
+서버와 DB를 실행하지 않고 AI 연결과 서비스의 질문 검증을 확인한다.
 
 실행:
     # 레포 루트에서
@@ -9,7 +8,10 @@ DB도, FastAPI도, 도커도 없이 ai_service.py 만 검증한다.
     cp .env.example .env        # AI_API_KEY 채우기
     python scripts/ai_smoke_test.py
 
-    # 특정 테스트만
+    # 실제 API 호출 없이 확인
+    python scripts/ai_smoke_test.py validation limit fallback
+
+    # 특정 테스트만 (context는 실제 API 호출)
     python scripts/ai_smoke_test.py context fallback
 
 테스트 목록:
@@ -24,10 +26,10 @@ DB도, FastAPI도, 도커도 없이 ai_service.py 만 검증한다.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import sys
-from pathlib import Path
+from pathlib       import Path
+from unittest.mock import patch
 
 # 레포 루트를 import 경로에 추가 (python scripts/... 로 실행 가능하게)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -38,14 +40,9 @@ try:
 except ImportError:
     print("[warn] python-dotenv 미설치 — 환경 변수를 직접 export 하세요.\n")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)-7s %(name)s  %(message)s",
-)
-# SDK / HTTP 라이브러리 로그가 우리 로그를 덮어써서 읽기 어려워지므로 낮춘다.
-# (서버에서도 app/core/logging.py 에 같은 설정을 넣는 것을 권장)
-for _noisy in ("httpx", "httpcore", "google_genai", "google.genai"):
-    logging.getLogger(_noisy).setLevel(logging.WARNING)
+from app.core.logging import configure_logging
+
+configure_logging()
 
 
 def _banner(title: str) -> None:
@@ -66,13 +63,15 @@ def _verdict(ok: bool, label: str) -> None:
 # 1. 기본 호출  (실제 API 사용)
 # ---------------------------------------------------------------------------
 async def test_basic() -> None:
-    from app.services import ai_service
+    from app.services           import AI_connect
+    from app.schemas.chat       import ChatRequest
+    from app.services.chat_main import validate_question
 
     _banner("1. 기본 질문")
-    print(f"주 모델: {ai_service.AI_MODEL} / 폴백: {ai_service.AI_FALLBACK_MODEL}")
+    print(f"주 모델: {AI_connect.AI_MODEL} / 폴백: {AI_connect.AI_FALLBACK_MODEL}")
 
-    q = ai_service.validate_question("  Gemini API가 뭐야? 두 문장으로 설명해줘.  ")
-    result = await ai_service.generate_answer(q, user_id="smoke-test")
+    q = validate_question(ChatRequest(question="  Gemini API가 뭐야? 두 문장으로 설명해줘.  "))
+    result = await AI_connect.generate_answer(q, user_id="smoke-test")
 
     print(f"status        : {result.status}")
     print(f"model         : {result.model}")
@@ -80,14 +79,14 @@ async def test_basic() -> None:
     print(f"latency_ms    : {result.latency_ms}")
     print(f"tokens        : {result.prompt_tokens} + {result.completion_tokens}")
     print(f"answer        : {result.answer}")
-    _verdict(result.is_success, "정상 응답")
+    _verdict(result.status == "success", "정상 응답")
 
 
 # ---------------------------------------------------------------------------
 # 2. 문맥 유지 (미션 테스트 케이스)  (실제 API 사용)
 # ---------------------------------------------------------------------------
 async def test_context() -> None:
-    from app.services import ai_service
+    from app.services import AI_connect
 
     _banner("2. 문맥 유지 — '내가 방금 뭘 물어봤지?'")
 
@@ -99,11 +98,11 @@ async def test_context() -> None:
          "answer": "uvicorn으로 실행하고 Docker로 컨테이너화한 뒤 서버에 올립니다."},
     ]
 
-    payload = ai_service.build_contents("내가 방금 뭘 물어봤지?", history)
+    payload = AI_connect.build_contents("내가 방금 뭘 물어봤지?", history)
     print(f"contents 개수 : {len(payload.contents)} (history {len(history)*2} + 질문 1)")
     print(f"roles         : {[c['role'] for c in payload.contents]}")
 
-    result = await ai_service.generate_answer(
+    result = await AI_connect.generate_answer(
         "내가 방금 뭘 물어봤지?", history, user_id="smoke-test"
     )
     print(f"answer        : {result.answer}")
@@ -116,15 +115,14 @@ async def test_context() -> None:
 async def test_timeout() -> None:
     _banner("3. 타임아웃 (강제) — 예외가 새어나오면 안 됨")
 
-    os.environ["AI_TIMEOUT_SECONDS"] = "0.001"
-    os.environ["AI_TOTAL_TIMEOUT_SECONDS"] = "0.5"
-    os.environ["AI_MAX_RETRIES"] = "0"
-
-    import importlib
-    from app.services import ai_service
-    importlib.reload(ai_service)
-
-    result = await ai_service.generate_answer("긴 글을 요약해줘", user_id="smoke-test")
+    from app.services import AI_connect
+    with patch.multiple(
+        AI_connect,
+        AI_TIMEOUT_SECONDS       = 0.001,
+        AI_TOTAL_TIMEOUT_SECONDS = 0.5,
+        AI_MAX_RETRIES           = 0,
+    ):
+        result = await AI_connect.generate_answer("긴 글을 요약해줘", user_id="smoke-test")
 
     print(f"status        : {result.status}")
     print(f"error_code    : {result.error_code}")
@@ -135,29 +133,28 @@ async def test_timeout() -> None:
         "예외 없이 타임아웃으로 처리되었는가",
     )
 
-    for k in ("AI_TIMEOUT_SECONDS", "AI_TOTAL_TIMEOUT_SECONDS", "AI_MAX_RETRIES"):
-        os.environ.pop(k, None)
-    importlib.reload(ai_service)
-
-
 # ---------------------------------------------------------------------------
 # 4. 입력 검증  (API 호출 없음)
 # ---------------------------------------------------------------------------
 async def test_validation() -> None:
-    from app.services import ai_service
+    from pydantic               import ValidationError
+    from app.core.config        import MAX_QUESTION_LENGTH
+    from app.core.errors        import APIError
+    from app.schemas.chat       import ChatRequest
+    from app.services.chat_main import validate_question
 
     _banner("4. 입력 검증")
 
     cases = [("빈 문자열", ""), ("공백만", "     "), ("None", None),
-             ("초장문", "가" * (ai_service.MAX_QUESTION_LENGTH + 1))]
+             ("초장문", "가" * (MAX_QUESTION_LENGTH + 1))]
     ok = True
     for label, value in cases:
         try:
-            ai_service.validate_question(value)
+            validate_question(ChatRequest(question=value))
             print(f"  {label:10s} → ❌ 통과되면 안 됨")
             ok = False
-        except ai_service.QuestionValidationError as e:
-            print(f"  {label:10s} → ✅ 차단: {e.message}")
+        except (APIError, ValidationError):
+            print(f"  {label:10s} → ✅ 차단")
     _verdict(ok, "모든 잘못된 입력이 차단되는가")
 
 
@@ -165,24 +162,24 @@ async def test_validation() -> None:
 # 5. 컨텍스트 길이 제한  (API 호출 없음)
 # ---------------------------------------------------------------------------
 async def test_context_limit() -> None:
-    from app.services import ai_service
+    from app.services import AI_connect
 
     _banner("5. 컨텍스트 길이 제한")
 
     long_history = [{"question": "질문" * 500, "answer": "답변" * 500} for _ in range(10)]
-    payload = ai_service.build_contents("짧은 질문", long_history)
+    payload = AI_connect.build_contents("짧은 질문", long_history)
     total = sum(len(c["parts"][0]["text"]) for c in payload.contents)
 
     print(f"  원본 히스토리 : 10턴")
-    print(f"  사용된 턴     : {payload.turns_used}턴 (상한 {ai_service.AI_CONTEXT_TURNS})")
-    print(f"  총 글자 수    : {total} (상한 {ai_service.MAX_CONTEXT_CHARS})")
+    print(f"  사용된 턴     : {payload.turns_used}턴 (상한 {AI_connect.AI_CONTEXT_TURNS})")
+    print(f"  총 글자 수    : {total} (상한 {AI_connect.MAX_CONTEXT_CHARS})")
     print(f"  잘림 표시     : {payload.truncated}")
 
     dirty = [
         {"question": "성공한 질문", "answer": "성공한 답변"},
         {"question": "타임아웃난 질문", "answer": None},
     ]
-    texts = [c["parts"][0]["text"] for c in ai_service.build_contents("다음", dirty).contents]
+    texts = [c["parts"][0]["text"] for c in AI_connect.build_contents("다음", dirty).contents]
     _verdict("타임아웃난 질문" not in texts, "answer=None 인 대화가 제외되는가")
 
 
@@ -190,7 +187,7 @@ async def test_context_limit() -> None:
 # 6. 폴백 동작  (API 호출 없음 — 가짜 실패를 주입한다)
 # ---------------------------------------------------------------------------
 async def test_fallback() -> None:
-    from app.services import ai_service as s
+    from app.services import AI_connect as s
     from google.genai import errors
 
     _banner("6. 폴백 동작 (가짜 실패 주입)")
@@ -238,11 +235,11 @@ async def test_fallback() -> None:
             "success", fallback))
         results.append(await scenario(
             "주 429 → 폴백",
-            lambda m: errors.APIError(429, "quota") if m == primary else ok_success,
+            lambda m: errors.APIError(429, {}) if m == primary else ok_success,
             "success", fallback))
         results.append(await scenario(
             "주 404(모델명 오타) → 폴백",
-            lambda m: errors.APIError(404, "not found") if m == primary else ok_success,
+            lambda m: errors.APIError(404, {}) if m == primary else ok_success,
             "success", fallback))
         results.append(await scenario(
             "둘 다 실패", lambda m: asyncio.TimeoutError(), "timeout"))

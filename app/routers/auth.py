@@ -1,15 +1,24 @@
-from fastapi            import APIRouter, Depends
-from sqlalchemy.orm     import Session
-from app.services.auth  import login, register
-from app.schemas.auth   import AuthRequest
-from app.db             import get_db
+from fastapi                import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.auth      import login, register
+from app.schemas.auth       import AuthRequest
+from app.db                 import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+
 @router.post("/login")
-def login_route(data: AuthRequest, db: Session = Depends(get_db)):
-    return login(data, db)
+async def login_route(
+    data : AuthRequest,
+    db   : AsyncSession = Depends(get_db),
+):
+    return await login(data, db)
+
 
 @router.post("/register")
-def login_route(data: AuthRequest, db: Session = Depends(get_db)):
-    return register(data, db)
+async def register_route(
+    data : AuthRequest,
+    db   : AsyncSession = Depends(get_db),
+):
+    return await register(data, db)

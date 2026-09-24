@@ -95,7 +95,7 @@ function bindAuthEvents() {
       const result = await response.json();
 
       if (!response.ok) {
-        status.textContent = '요청에 실패했습니다.';
+        status.textContent = typeof result.message === 'string' ? result.message : '요청에 실패했습니다.';
         return;
       }
 

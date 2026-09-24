@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy.orm         import Session
 from sqlalchemy.exc         import SQLAlchemyError
 from datetime               import datetime, timezone
@@ -5,6 +7,8 @@ from datetime               import datetime, timezone
 from app.core.config        import AI_CONTEXT_TURNS
 from app.schemas.chat       import AIResult
 from app.models.chatlog     import ChatLog
+
+logger = logging.getLogger(__name__)
 
 def save_result(db: Session, user_id: str, question: str, result: AIResult):
     created_at = datetime.now(timezone.utc)

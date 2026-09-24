@@ -26,7 +26,12 @@ from app.core.config import (
 
 from app.services.prompt import CONTEXT_TRUNCATED_NOTICE, SYSTEM_PROMPT
 
-from app.core.errors  import ErrorCode
+from app.core.errors import (
+    ErrorCode,
+    RETRY_SAME_MODEL,
+    FALLBACK_TRIGGERS,
+    USER_MESSAGES,
+)
 from app.schemas.chat import AIResult
 
 logger = logging.getLogger("app.ai")

@@ -14,7 +14,7 @@ class APIError(Exception):
 
 async def api_error_handler(request: Request, exc: APIError):
     headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
-    return JSONResponse(status_code=exc.status_code, content=exc.body.model_dump(), headers=headers)
+    return JSONResponse(status_code=exc.status_code, content=exc.body, headers=headers)
 
 
 class ErrorCode:

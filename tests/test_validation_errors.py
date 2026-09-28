@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core               import config
 from app.models.chatlog     import ChatLog
+from app.models.login       import Login
 from app.schemas.chat       import AIResult
 from app.services           import auth
 
@@ -171,6 +172,32 @@ def test_auth_boundaries_duplicate_and_wrong_credentials(client):
         response = client.post("/auth/login", json=invalid)
         assert response.status_code == 401
         assert response.json()["error_code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.parametrize("user_id", ["space user", "a" * 50], ids=["internal-space", "max-length"])
+def test_auth_normalizes_id_without_changing_password(client, database, user_id):
+    padded_id = f" \t{user_id}\n "
+    password = "  spaced-password  "
+    response = client.post("/auth/register", json={"id": padded_id, "pw": password})
+    assert response.status_code == 200
+    with database() as db:
+        assert db.get(Login, user_id).id == user_id
+        assert db.get(Login, padded_id) is None
+
+    for login_id in (user_id, padded_id):
+        response = client.post("/auth/login", json={"id": login_id, "pw": password})
+        assert response.status_code == 200
+        headers = {"Authorization": f"Bearer {response.json()['token']}"}
+        assert client.get("/api/me/chats", headers=headers).status_code == 200
+
+    for duplicate_id in (user_id, padded_id):
+        response = client.post("/auth/register", json={"id": duplicate_id, "pw": password})
+        assert response.status_code == 409
+        assert response.json()["error_code"] == "USER_ALREADY_EXISTS"
+
+    response = client.post("/auth/login", json={"id": user_id, "pw": password.strip()})
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "UNAUTHORIZED"
 
 
 def test_auth_database_failure_and_unexpected_error(client, monkeypatch):

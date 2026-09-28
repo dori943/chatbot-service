@@ -3,9 +3,10 @@
 | 항목 | 내용 |
 |---|---|
 | 최초 작성자·작성일 | 이건탁 · 2026-09-22 |
-| 최종 수정일 | 2026-09-25 |
+| 최종 수정일 | 2026-09-28 |
 | 대상 브랜치 | `refactor/bsg-back/app-refactoring` |
 | 실행 검증 | 2026-09-25: MySQL·Chromium pytest 114 passed, 1 deselected / JS 11 passed / 오프라인 AI 스모크 3개 시나리오 통과 |
+| 인증 수정 검증 | 2026-09-28: 전용 MySQL에서 `tests/test_validation_errors.py`, `tests/test_auth_dependency.py` 실행, 52 passed |
 
 실행 검증은 모의 AI 응답을 사용했다. 실제 AI 호출 테스트 1개와 외부 배포 환경은 검증 대상에서 제외했다.
 pytest 실행 시 의존 라이브러리의 사용 중단 예정 경고 3건이 발생했으며, 테스트 실패는 없었다.

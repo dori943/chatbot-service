@@ -24,7 +24,8 @@ async def check_user(user_id: str, db: AsyncSession) -> bool:
 
 
 def validate_auth(data: AuthRequest):
-    if not data.id.strip():
+    data.id = data.id.strip()
+    if not data.id:
         raise APIError(422, ErrorCode.INVALID_INPUT, "아이디를 입력해 주세요.")
     if len(data.id) > 50:
         raise APIError(422, ErrorCode.INVALID_INPUT, "아이디는 50자 이내로 입력해 주세요.")

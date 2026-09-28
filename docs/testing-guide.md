@@ -5,8 +5,8 @@
 | 최초 작성자·작성일 | 이건탁 · 2026-09-22 |
 | 최종 수정일 | 2026-09-28 |
 | 대상 브랜치 | `refactor/bsg-back/app-refactoring` |
-| 실행 검증 | 2026-09-25: MySQL·Chromium pytest 114 passed, 1 deselected / JS 11 passed / 오프라인 AI 스모크 3개 시나리오 통과 |
-| 인증 수정 검증 | 2026-09-28: 전용 MySQL에서 `tests/test_validation_errors.py`, `tests/test_auth_dependency.py` 실행, 52 passed |
+| 실행 검증 | 2026-09-28: MySQL·Chromium pytest 124 passed, 1 deselected / JS 11 passed / 오프라인 AI 스모크 3개 시나리오 통과 |
+| Compose 초기화 검증 | 2026-09-28: 기존 컨테이너·DB 볼륨 제거 후 재생성. 필수 `room_id` 컬럼, 웹 접속·가입·로그인·방 ID 전송·입력 검증 확인. 임시 계정 정리 후 계정·대화 기록 0건 |
 
 실행 검증은 모의 AI 응답을 사용했다. 실제 AI 호출 테스트 1개와 외부 배포 환경은 검증 대상에서 제외했다.
 pytest 실행 시 의존 라이브러리의 사용 중단 예정 경고 3건이 발생했으며, 테스트 실패는 없었다.
@@ -143,21 +143,24 @@ try {
 | 파일 (`tests/`) | 검증 대상 |
 |---|---|
 | `test_auth_dependency.py` | 토큰 누락·만료·위조, 사용자 존재 여부, 인증 설정과 DB 오류 |
-| `test_validation_errors.py` | 입력 경계값, 인증 실패·중복 가입, AI 실패 기록, DB 롤백, 오류 응답 형식 |
-| `test_chat_api.py` | 화면·API 등록, 본인 기록 최신순 조회, 본인의 성공 기록만 문맥에 전달 |
+| `test_validation_errors.py` | 방 ID 필수·타입·길이·공백 처리, 질문 경계값, 인증 실패·중복 가입, AI 실패 기록, DB 롤백, 오류 응답 형식 |
+| `test_chat_api.py` | 화면·API 등록, 본인 기록 최신순 조회, 같은 사용자·같은 방의 성공 기록만 문맥에 전달, 방 ID 대소문자 구분 |
 | `test_async_chat.py` | AI 대기 중 DB 연결 반환, bcrypt 처리 중 다른 요청, 요청 취소, 롤백 후 재사용, DB 엔진 종료 |
 | `test_logging.py` | 앱 처리 전 수신 로그, 요청 ID 연결·동시 요청 분리, 취소와 완료 구분, 민감정보 제외 |
 | `test_ai_connect.py` | 문맥 순서·길이, AI 오류 분류·대체 모델 호출, 호출 시간 초과와 취소 전파 |
-| `test_mysql_integration.py` | 초기 테이블과 ORM 일치, 5,000자·이모지·시간 정밀도, 외래키 제약 |
-| `test_browser_integration.py` | 게스트 전송 차단, 로그인·질문·답변 표시·DB 저장·로그아웃 |
+| `test_mysql_integration.py` | 초기 테이블과 ORM의 타입·대조 규칙 일치, 5,000자·이모지·시간 정밀도, 외래키 제약 |
+| `test_browser_integration.py` | 게스트 전송 차단, 로그인·질문·답변 표시·DB 저장·로그아웃, 새 방 분리·기존 방 재개·새로고침·방 삭제 후 전송 |
 | `test_live_ai.py` | 실제 AI 응답과 테스트 DB 저장·조회 |
-| `chat-api.test.mjs` | 토큰·질문 전송, 오류 안내, 취소와 시간 초과 구분 |
+| `chat-api.test.mjs` | 토큰·질문·방 ID 전송, 오류 안내, 취소와 시간 초과 구분 |
 
-화면 대화방은 브라우저 저장소 기능이다. 서버 대화방 CRUD와 화면·서버 기록 동기화는 검증 범위에 포함되지 않는다.
+화면의 대화방 목록은 브라우저 저장소에서 관리하고, 방 ID를 서버로 전송해 문맥을 구분한다.
+서버 대화방 CRUD와 화면·서버 기록 동기화는 검증 범위에 포함되지 않는다.
 
 ## 실제 Compose 웹 검증
 
 앱의 `.env`에 DB·인증·AI 설정이 필요하며 실제 질문은 외부 AI를 호출한다.
+`room_id` 컬럼이 없는 기존 개발 DB는 [README의 초기화 절차](../README.md#실행)에 따라 재생성한다.
+2026-09-28 Compose 검증은 AI 호출 전 입력 검증까지 실행했으며, 방별 질문·답변 흐름은 모의 AI를 사용하는 브라우저 통합 테스트에서 검증했다.
 
 ```powershell
 docker compose up --build -d --wait
@@ -172,7 +175,8 @@ docker compose up --build -d --wait
 |---|---|
 | 게스트 질문 전송 | 로그인 안내 표시, 채팅 요청 미전송 |
 | 회원가입·로그인 | HTTP 200, 사용자 ID 표시 |
-| 로그인 후 질문 전송 | HTTP 200, `answer`, `request_id`, `created_at` 반환 및 답변 표시 |
+| 로그인 후 질문 전송 | `room_id`와 `question` 전송. HTTP 200, `room_id`, `answer`, `request_id`, `created_at` 반환 및 답변 표시 |
+| 새 방 생성·기존 방 재선택 | 새 방에는 이전 방 문맥 미포함. 기존 방에는 해당 방의 문맥만 전달 |
 | 채팅 응답 비교 | 본문의 `request_id`와 응답 헤더 `X-Request-ID` 일치 |
 | `/docs`에서 로그인 토큰으로 `GET /api/me/chats` 호출 | 본인 기록만 조회, 성공 기록의 `status`는 `success` |
 | 로그아웃 | 사용자 ID와 해당 계정의 화면 대화 숨김 |
@@ -189,7 +193,7 @@ docker compose exec db mysql -uroot -p
 
 SQL 조회 대상은 `.env`의 `MYSQL_DATABASE`에 지정된 DB다.
 `scripts/check_logs.sql`은 테이블 구조, 대화 기록, 오류·응답 시간 집계를 조회한다.
-쿼리의 사용자 ID와 요청 ID는 검증 대상 값으로 지정한다.
+쿼리의 사용자 ID·방 ID·요청 ID는 검증 대상 값으로 지정한다.
 서버 로그와 저장 기록의 연결 키는 `request_id`다.
 
 ## 판정 조건

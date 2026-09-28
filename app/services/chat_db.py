@@ -13,6 +13,7 @@ from app.models.chatlog     import ChatLog
 async def save_result(
     db       : AsyncSession,
     user_id  : str,
+    room_id  : str,
     question : str,
     result   : AIResult,
 ):
@@ -21,6 +22,7 @@ async def save_result(
     try:
         row = ChatLog(
             user_id    = user_id,
+            room_id    = room_id,
             question   = question,
             answer     = result.answer,
             status     = result.status,
@@ -50,6 +52,7 @@ async def get_list_chat(user_id: str, db: AsyncSession):
         rows = await db.execute(
             select(
                 ChatLog.id,
+                ChatLog.room_id,
                 ChatLog.question,
                 ChatLog.answer,
                 ChatLog.status,
@@ -70,6 +73,7 @@ async def get_list_chat(user_id: str, db: AsyncSession):
 
 async def get_history(
     user_id : str,
+    room_id : str,
     db      : AsyncSession,
     limit   : int = AI_CONTEXT_TURNS,
 ) -> list[dict[str, str]]:
@@ -77,7 +81,11 @@ async def get_history(
         # 문맥 조회 트랜잭션을 끝내 DB 연결을 반환한 뒤 AI를 기다린다.
         rows = await db.execute(
             select(ChatLog.question, ChatLog.answer)
-            .where(ChatLog.user_id == user_id, ChatLog.status == "success")
+            .where(
+                ChatLog.user_id == user_id,
+                ChatLog.room_id == room_id,
+                ChatLog.status == "success",
+            )
             .order_by(ChatLog.id.desc())
             .limit(limit)
         )

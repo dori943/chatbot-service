@@ -104,7 +104,7 @@ async def test_request_received_is_logged_before_downstream_without_reading_body
 def test_chat_request_id_matches_logs_response_and_database(client, database, auth_headers, monkeypatch, app_logs):
     monkeypatch.setattr(AI_connect, "_call_once", AsyncMock(return_value=("private-answer", None, None)))
     response = client.post(
-        "/api/chat?private-query=hidden", json={"question": "private-question"},
+        "/api/chat?private-query=hidden", json={"room_id": "room-a", "question": "private-question"},
         headers={**auth_headers, "X-Request-ID": "untrusted-request-id"},
     )
     assert response.status_code == 200
@@ -132,7 +132,7 @@ def test_chat_request_id_matches_logs_response_and_database(client, database, au
 def test_error_logs_have_request_id_without_sensitive_details(client, monkeypatch, app_logs, kind, status, code):
     payload = {"id": "private-login-id", "pw": "private-password"}
     if kind == "unauthorized":
-        response = client.post("/api/chat", json={"question": "private-question"})
+        response = client.post("/api/chat", json={"room_id": "room-a", "question": "private-question"})
     else:
         endpoint = "/auth/login"
         if kind == "validation":
@@ -173,7 +173,7 @@ def test_ai_exception_logs_only_error_kind(client, auth_headers, monkeypatch, ap
     )
     monkeypatch.setattr(AI_connect, "AI_MAX_RETRIES", 0)
     monkeypatch.setattr(AI_connect, "AI_FALLBACK_MODEL", "")
-    response = client.post("/api/chat", json={"question": "private-question"}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": "private-question"}, headers=auth_headers)
     assert response.status_code == 502
     entries = records(app_logs)
     assert {record.request_id for record in entries} == {response.json()["request_id"]}
@@ -194,7 +194,7 @@ def test_ai_recovery_logs_keep_request_id(client, auth_headers, monkeypatch, app
         ("private-recovered-answer", None, None),
     ])
     monkeypatch.setattr(AI_connect, "_call_once", call)
-    response = client.post("/api/chat", json={"question": "private-question"}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": "private-question"}, headers=auth_headers)
     assert response.status_code == 200
     assert [args.args[0] for args in call.call_args_list] == ["primary", "primary" if retry else "fallback"]
     entries = records(app_logs)
@@ -212,7 +212,7 @@ def test_ai_fallback_skip_is_logged(client, auth_headers, monkeypatch, app_logs)
     monkeypatch.setattr(AI_connect, "MIN_FALLBACK_BUDGET_SECONDS", float("inf"))
     call = AsyncMock(return_value=(None, "AI_UPSTREAM_ERROR", None))
     monkeypatch.setattr(AI_connect, "_call_once", call)
-    response = client.post("/api/chat", json={"question": "private-question"}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": "private-question"}, headers=auth_headers)
     assert response.status_code == 502
     call.assert_awaited_once()
     skipped = next(record for record in records(app_logs) if record.getMessage().startswith("ai_fallback_skip"))
@@ -301,7 +301,7 @@ async def test_concurrent_requests_keep_separate_log_contexts(database, auth_hea
     monkeypatch.setattr(AI_connect, "generate_answer", answer)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         responses = await asyncio.gather(*[
-            client.post("/api/chat", json={"question": question}, headers=auth_headers)
+            client.post("/api/chat", json={"room_id": "room-a", "question": question}, headers=auth_headers)
             for question in ("first", "second")
         ])
     assert all(response.status_code == 200 for response in responses)

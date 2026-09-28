@@ -1,5 +1,5 @@
 -- 대화 기록 점검용 읽기 전용 쿼리. 실행 방법: docs/testing-guide.md
--- testuser 및 request_id 예시를 확인할 값으로 바꾼다.
+-- testuser, room_id, request_id 예시를 확인할 값으로 바꾼다.
 
 SHOW TABLES;
 DESCRIBE chat_logs;
@@ -17,7 +17,7 @@ SELECT
 FROM chat_logs;
 
 -- 최근 대화: DB 시각은 UTC, 표시할 때만 KST로 변환
-SELECT id, user_id, DATE_ADD(created_at, INTERVAL 9 HOUR) AS created_at_kst,
+SELECT id, user_id, room_id, DATE_ADD(created_at, INTERVAL 9 HOUR) AS created_at_kst,
        LEFT(question, 40) AS question, LEFT(answer, 60) AS answer,
        status, error_code, latency_ms, model, request_id
 FROM chat_logs ORDER BY id DESC LIMIT 20;
@@ -32,7 +32,7 @@ FROM login l LEFT JOIN chat_logs c ON c.user_id = l.id
 GROUP BY l.id ORDER BY chats DESC;
 
 -- 실패 요청 추적
-SELECT id, user_id, created_at, status, error_code, latency_ms, model, request_id
+SELECT id, user_id, room_id, created_at, status, error_code, latency_ms, model, request_id
 FROM chat_logs WHERE status <> 'success' ORDER BY id DESC LIMIT 20;
 SELECT error_code, COUNT(*) AS failures
 FROM chat_logs WHERE status <> 'success'
@@ -54,14 +54,14 @@ FROM chat_logs WHERE status = 'success' AND latency_ms IS NOT NULL
 GROUP BY latency_range ORDER BY MIN(latency_ms);
 
 -- 특정 사용자의 전체 대화 / 서버 로그의 request_id와 연결
-SELECT id, created_at, question, answer, status FROM chat_logs
+SELECT id, room_id, created_at, question, answer, status FROM chat_logs
 WHERE user_id = 'testuser' ORDER BY id;
 SELECT * FROM chat_logs WHERE request_id = 'replace-with-request-id';
 
--- AI 문맥 후보: 기본 최근 성공 5턴. 실제 프롬프트는 MAX_CONTEXT_CHARS에 따라 더 줄어들 수 있다.
+-- 해당 사용자·방의 AI 문맥 후보: 기본 최근 성공 5턴. MAX_CONTEXT_CHARS에 따라 더 줄어들 수 있다.
 SELECT * FROM (
     SELECT id, question, answer, created_at FROM chat_logs
-    WHERE user_id = 'testuser' AND status = 'success'
+    WHERE user_id = 'testuser' AND room_id = 'replace-with-room-id' AND status = 'success'
     ORDER BY id DESC LIMIT 5
 ) AS recent ORDER BY id;
 

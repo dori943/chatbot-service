@@ -3,7 +3,8 @@ from dataclasses import dataclass
 
 
 class ChatRequest(BaseModel):
-    question: str
+    room_id  : str
+    question : str
 
 
 @dataclass

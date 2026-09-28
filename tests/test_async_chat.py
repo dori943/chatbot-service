@@ -49,7 +49,7 @@ async def test_chat_releases_db_while_waiting_and_returns_saved_timestamp(databa
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             pending = asyncio.create_task(client.post(
-                "/api/chat", json={"question": "안녕"}, headers=auth_headers,
+                "/api/chat", json={"room_id": "room-a", "question": "안녕"}, headers=auth_headers,
             ))
             try:
                 await asyncio.wait_for(started.wait(), timeout=5)
@@ -66,7 +66,7 @@ async def test_chat_releases_db_while_waiting_and_returns_saved_timestamp(databa
 
             assert response.status_code == 200
             body = response.json()
-            assert set(body) == {"answer", "request_id", "created_at"}
+            assert set(body) == {"room_id", "answer", "request_id", "created_at"}
             assert body["created_at"].endswith("Z")
             with database() as db:
                 saved = db.query(ChatLog).one()
@@ -74,7 +74,7 @@ async def test_chat_releases_db_while_waiting_and_returns_saved_timestamp(databa
                 assert saved.request_id == body["request_id"]
                 assert saved.created_at.replace(tzinfo=timezone.utc) == datetime.fromisoformat(body["created_at"])
 
-            response = await client.post("/api/chat", json={"question": "이어서"}, headers=auth_headers)
+            response = await client.post("/api/chat", json={"room_id": "room-a", "question": "이어서"}, headers=auth_headers)
             assert response.status_code == 200
             assert histories == [[], [{"question": "안녕", "answer": "테스트 답변"}]]
     finally:
@@ -131,7 +131,7 @@ async def test_register_login_and_unpaginated_history(database, monkeypatch):
         assert response.json()["message"] == "login success"
         headers = {"Authorization": f"Bearer {response.json()['token']}"}
         for question in ("first", "second"):
-            response = await client.post("/api/chat", json={"question": question}, headers=headers)
+            response = await client.post("/api/chat", json={"room_id": "room-a", "question": question}, headers=headers)
             assert response.status_code == 200
         response = await client.get("/api/me/chats", headers=headers)
         assert [row["question"] for row in response.json()] == ["second", "first"]
@@ -147,7 +147,7 @@ async def test_history_failure_rolls_back_before_reusing_session(database, monke
             await original(text("SELECT * FROM missing_test_table"))
 
         monkeypatch.setattr(db, "execute", fail_query)
-        assert await chat_db.get_history("alice", db) == []
+        assert await chat_db.get_history("alice", "room-a", db) == []
         assert not db.in_transaction()
         monkeypatch.setattr(db, "execute", original)
         result = AIResult(
@@ -157,7 +157,7 @@ async def test_history_failure_rolls_back_before_reusing_session(database, monke
             latency_ms = 1,
             answer     = "ok",
         )
-        await chat_db.save_result(db, "alice", "question", result)
+        await chat_db.save_result(db, "alice", "room-a", "question", result)
         assert len(await chat_db.get_list_chat("alice", db)) == 1
 
 
@@ -194,7 +194,7 @@ async def test_cancelled_request_releases_session_without_saving_failure(databas
                 try:
                     return await client.post(
                         "/api/chat",
-                        json    = {"question": "cancelled"},
+                        json    = {"room_id": "room-a", "question": "cancelled"},
                         headers = auth_headers,
                     )
                 finally:

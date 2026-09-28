@@ -1,7 +1,7 @@
 // 화면 상태와 분리된 채팅 요청 처리. 토큰은 호출 시점의 로그인 계정에서 전달한다.
 const REQUEST_TIMEOUT_MS = 30_000;
 
-export async function requestReply(question, token, signal) {
+export async function requestReply(question, roomId, token, signal) {
   if (!token) throw new Error('로그인 후 질문을 보내 주세요.');
   if (signal?.aborted) throw new DOMException('사용자가 중지했습니다.', 'AbortError');
   const controller = new AbortController();
@@ -18,7 +18,7 @@ export async function requestReply(question, token, signal) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       credentials: 'same-origin',
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, room_id: roomId }),
       signal: controller.signal,
     });
     const data = await response.json().catch(() => null);

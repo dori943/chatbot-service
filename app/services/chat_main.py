@@ -13,9 +13,10 @@ from app.services           import chat_db, AI_connect
 
 
 async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
+    room_id    = validate_room_id(data)
     question   = validate_question(data)
     request_id = request_id_context.get() or uuid4().hex
-    history    = await chat_db.get_history(user_id, db)
+    history    = await chat_db.get_history(user_id, room_id, db)
     started    = time.perf_counter()
 
     try:
@@ -48,6 +49,7 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
     created_at = await chat_db.save_result(
         db       = db,
         user_id  = user_id,
+        room_id  = room_id,
         question = question,
         result   = result
     )
@@ -61,10 +63,20 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
         )
 
     return {
+        "room_id"    : room_id,
         "answer"     : result.answer,
         "request_id" : result.request_id,
         "created_at" : created_at.isoformat().replace("+00:00", "Z"),
     }
+
+
+def validate_room_id(data: ChatRequest) -> str:
+    room_id = data.room_id.strip()
+    if not room_id:
+        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID를 입력해 주세요.")
+    if len(room_id) > 64:
+        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID는 64자 이내로 입력해 주세요.")
+    return room_id
 
 
 def validate_question(data: ChatRequest) -> str:
@@ -106,6 +118,7 @@ async def get_my_chat(user_id: str, db: AsyncSession):
     return [
         {
             "id"         : row.id,
+            "room_id"    : row.room_id,
             "question"   : row.question,
             "answer"     : row.answer,
             "status"     : row.status,

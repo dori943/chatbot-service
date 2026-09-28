@@ -18,14 +18,17 @@ from app.utils          import security
 pytestmark = pytest.mark.skipif(os.getenv("RUN_BROWSER_TESTS") != "1", reason="브라우저 테스트는 선택 실행")
 
 
-def test_login_send_and_owner_switch(database, monkeypatch):
+def test_login_room_context_and_owner_switch(database, monkeypatch):
     from playwright.sync_api import sync_playwright, expect
 
     with database() as db:
         db.get(Login, "이건탁").pw = security.hash_password("test-only-123")
         db.commit()
 
-    async def answer(question, **kwargs):
+    histories = []
+
+    async def answer(question, history, **kwargs):
+        histories.append(history)
         return AIResult(
             status     = "success",
             request_id = kwargs["request_id"],
@@ -61,14 +64,48 @@ def test_login_send_and_owner_switch(database, monkeypatch):
                 page.locator("#auth-password").fill("test-only-123")
                 page.locator(".auth-submit").click()
                 expect(page.locator("#header-user")).to_have_text("이건탁")
-                page.locator("#question").fill("브라우저 질문")
-                with page.expect_response("**/api/chat") as result:
-                    page.locator("#send").click()
-                assert result.value.status == 200
-                assert result.value.request.headers["authorization"].startswith("Bearer ")
+                def send_question(question):
+                    page.locator("#question").fill(question)
+                    with page.expect_response("**/api/chat") as result:
+                        page.locator("#send").click()
+                    assert result.value.status == 200
+                    assert result.value.request.headers["authorization"].startswith("Bearer ")
+                    expect(page.locator("#send")).to_be_enabled()
+                    sent = result.value.request.post_data_json
+                    assert result.value.json()["room_id"] == sent["room_id"]
+                    return sent["room_id"]
+
+                first_room = send_question("브라우저 질문")
+                assert histories[-1] == []
                 expect(page.locator(".message.assistant .message-text")).to_have_text("브라우저 통합 테스트 답변")
                 with database() as db:
-                    assert db.query(ChatLog).one().user_id == "이건탁"
+                    row = db.query(ChatLog).one()
+                    assert (row.user_id, row.room_id) == ("이건탁", first_room)
+
+                assert send_question("같은 방 후속 질문") == first_room
+                first_turn = {"question": "브라우저 질문", "answer": "브라우저 통합 테스트 답변"}
+                assert histories[-1] == [first_turn]
+                page.locator("[data-new]").first.click()
+                second_room = send_question("새 방 질문")
+                assert second_room != first_room
+                assert histories[-1] == []
+
+                page.locator("#history-list button").filter(has_text="브라우저 질문").click()
+                assert send_question("기존 방 재개") == first_room
+                assert histories[-1] == [
+                    first_turn,
+                    {"question": "같은 방 후속 질문", "answer": "브라우저 통합 테스트 답변"},
+                ]
+                page.reload()
+                page.locator("#history-list button").filter(has_text="브라우저 질문").click()
+                assert send_question("새로고침 후 질문") == first_room
+                assert [turn["question"] for turn in histories[-1]] == [
+                    "브라우저 질문", "같은 방 후속 질문", "기존 방 재개",
+                ]
+
+                page.locator(".delete-chat").click()
+                assert send_question("삭제 후 새 질문") not in (first_room, second_room)
+                assert histories[-1] == []
                 page.locator(".login-button").click()
                 expect(page.locator("#header-user")).to_be_hidden()
                 expect(page.locator(".message.assistant")).to_have_count(0)

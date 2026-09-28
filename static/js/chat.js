@@ -252,7 +252,7 @@ async function handleSubmit(event) {
   setBusy(true);
   setStatus('답변을 기다리고 있어요…');
   try {
-    const reply = await requestReply(question, getAccessToken(), controller.signal);
+    const reply = await requestReply(question, current.id, getAccessToken(), controller.signal);
     if (pending !== controller || storageKey !== requestStorageKey) return;
     current.messages.push({
       role: 'assistant',

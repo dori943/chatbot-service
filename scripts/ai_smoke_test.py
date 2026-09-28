@@ -70,7 +70,7 @@ async def test_basic() -> None:
     _banner("1. 기본 질문")
     print(f"주 모델: {AI_connect.AI_MODEL} / 폴백: {AI_connect.AI_FALLBACK_MODEL}")
 
-    q = validate_question(ChatRequest(question="  Gemini API가 뭐야? 두 문장으로 설명해줘.  "))
+    q = validate_question(ChatRequest(room_id="room-a", question="  Gemini API가 뭐야? 두 문장으로 설명해줘.  "))
     result = await AI_connect.generate_answer(q, user_id="smoke-test")
 
     print(f"status        : {result.status}")
@@ -150,7 +150,7 @@ async def test_validation() -> None:
     ok = True
     for label, value in cases:
         try:
-            validate_question(ChatRequest(question=value))
+            validate_question(ChatRequest(room_id="room-a", question=value))
             print(f"  {label:10s} → ❌ 통과되면 안 됨")
             ok = False
         except (APIError, ValidationError):

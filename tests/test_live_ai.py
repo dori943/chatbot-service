@@ -13,7 +13,7 @@ pytestmark = [
 
 def test_live_ai_answer_is_saved_and_readable(client, auth_headers):
     assert AI_connect.AI_API_KEY, "AI_API_KEY가 필요합니다."
-    response = client.post("/api/chat", json={"question": "안녕하세요라고 한 문장으로 답해 주세요."}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": "안녕하세요라고 한 문장으로 답해 주세요."}, headers=auth_headers)
     assert response.status_code == 200, f"status={response.status_code}, code={response.json().get('error_code')}"
     assert response.json()["answer"].strip()
     history = client.get("/api/me/chats", headers=auth_headers).json()

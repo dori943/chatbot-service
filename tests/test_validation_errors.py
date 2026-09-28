@@ -17,7 +17,7 @@ from app.services           import auth
     {"question": None}, {"question": 123}, {"question": []},
 ])
 def test_invalid_question_is_rejected_before_ai(client, database, auth_headers, ai_mock, payload):
-    response = client.post("/api/chat", json=payload, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", **payload}, headers=auth_headers)
     assert response.status_code == 422
     assert response.json()["error_code"] == "INVALID_INPUT"
     assert set(response.json()) == {"error_code", "message", "request_id"}
@@ -26,10 +26,35 @@ def test_invalid_question_is_rejected_before_ai(client, database, auth_headers, 
         assert db.query(ChatLog).count() == 0
 
 
+@pytest.mark.parametrize("payload", [
+    {}, {"room_id": None}, {"room_id": ""}, {"room_id": " \n "},
+    {"room_id": "r" * 65}, {"room_id": 123}, {"room_id": []},
+])
+def test_invalid_room_is_rejected_before_ai(client, database, auth_headers, ai_mock, payload):
+    response = client.post("/api/chat", json={"question": "hi", **payload}, headers=auth_headers)
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+    ai_mock.assert_not_called()
+    with database() as db:
+        assert db.query(ChatLog).count() == 0
+
+
+def test_room_id_boundary_and_normalization(client, database, auth_headers, ai_mock):
+    room_id = "r" * 64
+    response = client.post(
+        "/api/chat", json={"question": "hi", "room_id": f"  {room_id}  "}, headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["room_id"] == room_id
+    with database() as db:
+        assert db.query(ChatLog).one().room_id == room_id
+    assert client.get("/api/me/chats", headers=auth_headers).json()[0]["room_id"] == room_id
+
+
 def test_question_boundary_normalization_and_configured_limit(client, database, auth_headers, ai_mock, monkeypatch):
     response = client.post(
         "/api/chat",
-        json    = {"question": "  " + "가" * 5000 + "  ", "user_id": "bob"},
+        json    = {"room_id": "room-a", "question": "  " + "가" * 5000 + "  ", "user_id": "bob"},
         headers = auth_headers,
     )
     assert response.status_code == 200
@@ -39,7 +64,7 @@ def test_question_boundary_normalization_and_configured_limit(client, database, 
         assert db.query(ChatLog).one().user_id == "alice"
     monkeypatch.setattr(config, "MAX_QUESTION_LENGTH", 3)
     ai_mock.reset_mock()
-    assert client.post("/api/chat", json={"question": "four"}, headers=auth_headers).status_code == 422
+    assert client.post("/api/chat", json={"room_id": "room-a", "question": "four"}, headers=auth_headers).status_code == 422
     ai_mock.assert_not_called()
 
 
@@ -60,7 +85,7 @@ def test_ai_failure_is_saved_before_error_response(client, database, auth_header
         error_code   = code,
         user_message = "private-provider-details",
     )
-    response = client.post("/api/chat", json={"question": "hi"}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": "hi"}, headers=auth_headers)
     assert response.status_code == http
     body = response.json()
     assert body["error_code"] == code
@@ -85,7 +110,7 @@ def test_invalid_ai_answer_is_not_saved_as_success(client, database, auth_header
         latency_ms = 1,
         answer     = answer,
     )
-    response = client.post("/api/chat", json={"question": "hi"}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": "hi"}, headers=auth_headers)
     assert response.status_code == 502
     assert response.json()["error_code"] == code
     with database() as db:
@@ -110,7 +135,7 @@ def test_unexpected_ai_failures_are_recorded(client, database, auth_headers, ai_
     else:
         ai_mock.side_effect = None
         ai_mock.return_value = None
-    response = client.post("/api/chat", json={"question": "hi"}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": "hi"}, headers=auth_headers)
     assert response.status_code == http
     assert response.json()["error_code"] == code
     assert "private-provider-error" not in response.text
@@ -127,7 +152,7 @@ def test_save_failure_returns_503_and_rolls_back(client, database, auth_headers,
         await original_commit(db)
 
     monkeypatch.setattr(AsyncSession, "commit", fail_chat_save)
-    response = client.post("/api/chat", json={"question": "hi"}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": "hi"}, headers=auth_headers)
     assert response.status_code == 503
     assert response.json()["error_code"] == "DB_UNAVAILABLE"
     assert response.json()["request_id"]
@@ -137,9 +162,9 @@ def test_save_failure_returns_503_and_rolls_back(client, database, auth_headers,
 
 
 def test_history_error_and_response_contract(client, auth_headers, ai_mock, monkeypatch):
-    assert client.post("/api/chat", json={"question": "hi"}, headers=auth_headers).status_code == 200
+    assert client.post("/api/chat", json={"room_id": "room-a", "question": "hi"}, headers=auth_headers).status_code == 200
     item = client.get("/api/me/chats", headers=auth_headers).json()[0]
-    assert set(item) == {"id", "question", "answer", "status", "created_at"}
+    assert set(item) == {"id", "room_id", "question", "answer", "status", "created_at"}
     assert item["created_at"].endswith("Z")
     monkeypatch.setattr(AsyncSession, "execute", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
     response = client.get("/api/me/chats", headers=auth_headers)

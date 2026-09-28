@@ -12,16 +12,16 @@ def test_home_and_openapi_start(client):
 
 
 def test_auth_required_before_ai(client, ai_mock):
-    assert client.post("/api/chat", json={"question": "hi"}).status_code == 401
+    assert client.post("/api/chat", json={"room_id": "room-a", "question": "hi"}).status_code == 401
     assert client.get("/api/me/chats").status_code == 401
     ai_mock.assert_not_called()
 
 
 def test_history_is_owned_and_ordered_without_pagination(client, database, auth_headers, ai_mock):
     for question in ("first", "second"):
-        assert client.post("/api/chat", json={"question": question}, headers=auth_headers).status_code == 200
+        assert client.post("/api/chat", json={"room_id": "room-a", "question": question}, headers=auth_headers).status_code == 200
     bob_headers = {"Authorization": f"Bearer {security.create_token('bob')}"}
-    assert client.post("/api/chat", json={"question": "bob-private"}, headers=bob_headers).status_code == 200
+    assert client.post("/api/chat", json={"room_id": "room-a", "question": "bob-private"}, headers=bob_headers).status_code == 200
     # 같은 저장시각이라도 id 역순으로 일관되게 반환한다.
     with database() as db:
         for row in db.query(ChatLog):
@@ -37,50 +37,66 @@ def test_history_is_owned_and_ordered_without_pagination(client, database, auth_
     ).json()] == ["bob-private"]
 
 
-def test_context_contains_only_own_successful_turns_in_chronological_order(client, database, auth_headers, ai_mock):
+def test_context_contains_only_own_room_successful_turns_in_chronological_order(client, database, auth_headers, ai_mock):
     with database() as db:
         rows = [
             ChatLog(
+                room_id  = "room-a",
                 user_id  = "alice",
                 question = "first",
                 answer   = "first answer",
                 status   = "success",
             ),
             ChatLog(
+                room_id  = "room-a",
                 user_id  = "bob",
                 question = "private",
                 answer   = "private answer",
                 status   = "success",
             ),
             ChatLog(
+                room_id    = "room-a",
                 user_id    = "alice",
                 question   = "failed",
                 status     = "error",
                 error_code = "AI_TIMEOUT",
             ),
             ChatLog(
+                room_id  = "room-a",
                 user_id  = "alice",
                 question = "second",
                 answer   = "second answer",
                 status   = "success",
             ),
         ]
+        for room_id in ("room-b", "ROOM-A"):
+            rows.append(ChatLog(
+                user_id  = "alice",
+                room_id  = room_id,
+                question = "other room",
+                answer   = "other room answer",
+                status   = "success",
+            ))
         for row in rows:
             row.request_id = uuid4().hex
             row.created_at = datetime(2026, 1, 1)
         db.add_all(rows)
         db.commit()
-    response = client.post("/api/chat", json={"question": " next "}, headers=auth_headers)
+    response = client.post("/api/chat", json={"room_id": "room-a", "question": " next "}, headers=auth_headers)
     assert response.status_code == 200
     assert ai_mock.call_args.kwargs["question"] == "next"
     assert ai_mock.call_args.kwargs["history"] == [
         {"question": "first", "answer": "first answer"},
         {"question": "second", "answer": "second answer"},
     ]
+    assert response.json()["room_id"] == "room-a"
+    with database() as db:
+        assert db.query(ChatLog).filter_by(question="next").one().room_id == "room-a"
 
 
 def test_failed_answer_appears_in_history(client, auth_headers, ai_mock):
     ai_mock.side_effect = RuntimeError("provider-down")
-    assert client.post("/api/chat", json={"question": "failed"}, headers=auth_headers).status_code == 502
+    assert client.post("/api/chat", json={"room_id": "room-a", "question": "failed"}, headers=auth_headers).status_code == 502
     row = client.get("/api/me/chats", headers=auth_headers).json()[0]
     assert (row["question"], row["status"], row["answer"]) == ("failed", "error", None)
+    assert row["room_id"] == "room-a"

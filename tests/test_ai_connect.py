@@ -14,7 +14,7 @@ from app.services     import AI_connect as ai, chat_main
 
 @pytest.mark.parametrize("question", ["", " \n ", "가" * 5001], ids=["empty", "blank", "too-long"])
 def test_validation_is_in_service(question):
-    request = ChatRequest(room_id="room-a", question=question)
+    request = ChatRequest(room_id="room-a", room_name="Test room", question=question)
     with pytest.raises(APIError) as error:
         chat_main.validate_question(request)
     assert error.value.status_code == 422

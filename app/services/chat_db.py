@@ -11,11 +11,12 @@ from app.models.chatlog     import ChatLog
 
 
 async def save_result(
-    db       : AsyncSession,
-    user_id  : str,
-    room_id  : str,
-    question : str,
-    result   : AIResult,
+    db        : AsyncSession,
+    user_id   : str,
+    room_id   : str,
+    room_name : str,
+    question  : str,
+    result    : AIResult,
 ):
     created_at = datetime.now(timezone.utc)
 
@@ -23,6 +24,7 @@ async def save_result(
         row = ChatLog(
             user_id    = user_id,
             room_id    = room_id,
+            room_name  = room_name,
             question   = question,
             answer     = result.answer,
             status     = result.status,
@@ -53,6 +55,7 @@ async def get_list_chat(user_id: str, db: AsyncSession):
             select(
                 ChatLog.id,
                 ChatLog.room_id,
+                ChatLog.room_name,
                 ChatLog.question,
                 ChatLog.answer,
                 ChatLog.status,

@@ -24,7 +24,7 @@ docker compose logs -f backend
 일반 앱 실행 시 Python이 직접 읽지 않습니다. 인증 토큰 유효기간은 현재 60분입니다.
 
 `data/init.sql`은 빈 MySQL 데이터 디렉터리를 처음 만들 때만 실행됩니다.
-기존 볼륨은 재빌드·재시작으로 초기화되지 않습니다. 이번 변경은 `chat_logs.room_id` 필수 컬럼을 추가합니다.
+기존 볼륨은 재빌드·재시작으로 초기화되지 않습니다. 이번 변경은 `chat_logs.room_id`, `room_name` 필수 컬럼을 추가합니다.
 기존 개발 DB를 새 정의로 초기화하려면 아래 명령을 실행합니다. **기존 계정과 대화 기록이 삭제됩니다.**
 
 ```sh
@@ -40,26 +40,30 @@ docker compose up --build -d --wait
 |---|---|---|---|
 | POST | `/auth/register` | `{ "id": "...", "pw": "..." }` → 성공 메시지 | 없음 |
 | POST | `/auth/login` | 같은 요청 → `message`, `token`, `token_type` | 없음 |
-| POST | `/api/chat` | `{ "room_id": "...", "question": "..." }` → `room_id`, `answer`, `request_id`, `created_at` | Bearer 토큰 |
+| POST | `/api/chat` | `{ "room_id": "...", "room_name": "...", "question": "..." }` → `room_id`, `room_name`, `answer`, `request_id`, `created_at` | Bearer 토큰 |
 | GET | `/api/me/chats` | 본인 전체 기록 배열, 최신순 | Bearer 토큰 |
 
 채팅 인증 헤더는 `Authorization: Bearer <로그인 응답의 token>`입니다.
 사용자 ID는 토큰에서 가져옵니다. 요청에 추가한 `user_id` 등 정의되지 않은 필드는 무시합니다.
 `room_id`는 프론트가 생성한 대화방 ID입니다. 같은 방에서는 같은 값을 보내며 새 방에서는 새 값을 보냅니다.
-서비스에서 앞뒤 공백을 제거한 뒤 1~64자를 허용합니다. 대소문자는 구분하며, 다른 사용자와 같은 방 ID를 보내도 문맥은 공유되지 않습니다.
+서비스에서 앞뒤 공백을 제거한 뒤 1~64자를 허용합니다. 다른 사용자와 같은 방 ID를 보내도 문맥은 공유되지 않습니다.
+방 ID 비교는 DB 기본 대조 규칙을 따릅니다. 현재 Compose 설정에서는 대소문자를 구분하지 않습니다.
+`room_name`은 화면의 방 이름이며 앞뒤 공백 제거 후 1~100자를 허용합니다.
+프론트는 첫 질문의 앞 30자로 제목을 만들고, 같은 방의 후속 요청에도 해당 제목을 보냅니다.
 
 채팅 성공 응답은 HTTP 200입니다.
 
 ```json
 {
   "room_id": "room-example",
+  "room_name": "FastAPI란?",
   "answer": "FastAPI는 파이썬으로 API를 만드는 프레임워크입니다.",
   "request_id": "요청별 식별자",
   "created_at": "2026-09-24T07:00:00Z"
 }
 ```
 
-기록 조회는 `[{ "id": 1, "room_id": "room-example", "question": "...", "answer": "...", "status": "success", "created_at": "...Z" }]`
+기록 조회는 `[{ "id": 1, "room_id": "room-example", "room_name": "FastAPI란?", "question": "...", "answer": "...", "status": "success", "created_at": "...Z" }]`
 형식입니다. 실패 기록의 `answer`는 `null`입니다. 페이지네이션과 `items`·`total` 래핑은 사용하지 않습니다.
 
 인증·입력 검증·서비스 오류는 다음 형식으로 반환합니다. 같은 요청의 ID는 응답 헤더
@@ -93,6 +97,7 @@ docker compose up --build -d --wait
 - AI 문맥은 **같은 사용자·같은 방의 최근 성공 대화**입니다. 기본 5턴에서 길이에 따라 오래된 대화를 더 제외합니다.
 - 화면의 대화방 생성·삭제는 브라우저 저장소에서 동작합니다. 새 방은 별도 ID로 시작하고, 기존 방을 다시 선택하면 해당 방의 문맥을 사용합니다. 화면에서 방을 삭제해도 DB 기록은 삭제되지 않습니다.
 - 화면은 DB 기록 조회 API와 동기화되지 않습니다. 중지 버튼은 브라우저의 응답 대기를 취소하며 서버 처리 취소까지 보장하지 않습니다.
+- 방 이름은 각 대화 기록에 요청 당시 값으로 저장하고 기록 조회 API에서 반환합니다. 방 이름 변경 API와 서버 기록을 이용한 화면 복원은 구현하지 않았습니다.
 - JWT 만료 또는 채팅 요청의 401 응답 시 토큰을 정리하고 화면을 비로그인 상태로 갱신합니다. AI 오류인 502·503 응답은 로그인 상태를 유지합니다.
 
 ## 테스트
@@ -107,7 +112,7 @@ node --test tests/chat-api.test.mjs
 
 스모크는 기존 여섯 사례를 직접 실행합니다. 인자 없이 실행하면 API 키가 있는 경우
 실제 AI 호출도 포함하므로, 오프라인 검증에는 위처럼 사례를 지정합니다.
-2026-09-28 검증 결과: 전용 MySQL·Chromium을 포함한 pytest 149개, JS 테스트 11개,
+2026-09-28 검증 결과: 전용 MySQL·Chromium을 포함한 pytest 156개, JS 테스트 11개,
 오프라인 AI 스모크 3개 시나리오가 통과했습니다. 실제 AI 호출 테스트 1개는 제외했으며,
 외부 배포 환경은 이번 검증에 포함하지 않았습니다. 개발용 Compose의 컨테이너·DB 볼륨을
 재생성한 뒤 웹페이지 접속·가입·로그인·방 ID 전송·입력 검증도 확인했습니다.

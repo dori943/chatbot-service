@@ -3,8 +3,9 @@ from dataclasses import dataclass
 
 
 class ChatRequest(BaseModel):
-    room_id  : str
-    question : str
+    room_id   : str
+    room_name : str
+    question  : str
 
 
 @dataclass

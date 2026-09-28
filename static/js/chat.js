@@ -234,7 +234,7 @@ async function handleSubmit(event) {
   if (!current) {
     current = {
       id: uid(),
-      title: question.slice(0, MAX_CHATS),
+      title: Array.from(question).slice(0, 30).join(''),
       messages: []
     };
     chats.unshift(current);
@@ -254,7 +254,7 @@ async function handleSubmit(event) {
   setBusy(true);
   setStatus('답변을 기다리고 있어요…');
   try {
-    const reply = await requestReply(question, current.id, token, controller.signal);
+    const reply = await requestReply(question, current.id, current.title, token, controller.signal);
     if (pending !== controller || storageKey !== requestStorageKey) return;
     current.messages.push({
       role: 'assistant',

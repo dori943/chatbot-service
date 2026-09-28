@@ -17,7 +17,7 @@ SELECT
 FROM chat_logs;
 
 -- 최근 대화: DB 시각은 UTC, 표시할 때만 KST로 변환
-SELECT id, user_id, room_id, DATE_ADD(created_at, INTERVAL 9 HOUR) AS created_at_kst,
+SELECT id, user_id, room_id, room_name, DATE_ADD(created_at, INTERVAL 9 HOUR) AS created_at_kst,
        LEFT(question, 40) AS question, LEFT(answer, 60) AS answer,
        status, error_code, latency_ms, model, request_id
 FROM chat_logs ORDER BY id DESC LIMIT 20;
@@ -54,7 +54,7 @@ FROM chat_logs WHERE status = 'success' AND latency_ms IS NOT NULL
 GROUP BY latency_range ORDER BY MIN(latency_ms);
 
 -- 특정 사용자의 전체 대화 / 서버 로그의 request_id와 연결
-SELECT id, room_id, created_at, question, answer, status FROM chat_logs
+SELECT id, room_id, room_name, created_at, question, answer, status FROM chat_logs
 WHERE user_id = 'testuser' ORDER BY id;
 SELECT * FROM chat_logs WHERE request_id = 'replace-with-request-id';
 

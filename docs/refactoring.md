@@ -17,11 +17,11 @@
 | `app/schemas/` | 요청 및 서비스 간 데이터 타입 선언 | 내용 검증을 서비스로 이동. HTTP 응답 모델 제거. `AIResult`를 서비스 간 전달 타입으로 분리 |
 | `app/services/` | 입력 검증, 기능 실행, DB 조회·저장, 외부 AI 호출 | 인증·채팅 흐름·기록 처리·AI 연결 분리. 서비스 내부의 별도 DB 세션 생성 제거 |
 | `app/core/` | 공통 설정, 인증 의존성, 오류 응답, 로그 출력 | AI 설정 이동, 사용자 확인을 인증 서비스로 위임, 예외 핸들러·로그 미들웨어 추가 |
-| `app/models/` | 테이블·컬럼·관계의 ORM 매핑 | DDL에 맞게 `BIGINT`, `VARCHAR`, `DATETIME(6)` 타입 명시. 대화방 식별용 `room_id` 추가 |
+| `app/models/` | 테이블·컬럼·관계의 ORM 매핑 | DDL에 맞게 `BIGINT`, `VARCHAR`, `DATETIME(6)` 타입 명시. 대화방 식별용 `room_id`, 이름 저장용 `room_name` 추가 |
 | `app/utils/` | bcrypt 해시·검증, JWT 생성 | 연산 로직 유지. 서비스의 동기 bcrypt 호출에 스레드풀 적용 |
 | `app/db.py` | 엔진·세션 팩토리·DB 의존성 | `AsyncSession`·`aiomysql` 적용 |
 | `app/main.py` | 앱 구성 및 수명 주기 | 라우터·예외 핸들러·로그 미들웨어 등록. 앱 종료 시 DB 엔진 해제 |
-| `data/` | DB 최초 초기화 | `init.sql`에 `room_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL` 추가. 개발 DB는 볼륨 초기화 후 재생성 |
+| `data/` | DB 최초 초기화 | `init.sql`에 필수 컬럼 `room_id VARCHAR(64)`, `room_name VARCHAR(100)` 추가. 컬럼별 대조 규칙은 지정하지 않고 테이블 기본값 사용 |
 
 ### 1.2. 서비스 구성
 
@@ -66,7 +66,8 @@
 | 검증 대상 | 조건 | 실패 결과 |
 |---|---|---|
 | 인증 입력 | 가입·로그인 ID의 앞뒤 공백 제거 후 빈 값 거부·최대 50자 검사. 비밀번호는 공백 입력 거부·UTF-8 최대 72바이트 검사 후 원문 사용 | 422 `INVALID_INPUT` |
-| 방 ID | 필수 문자열. 앞뒤 공백 제거 후 1~64자, 대소문자 구분 | 422 `INVALID_INPUT` |
+| 방 ID | 필수 문자열. 앞뒤 공백 제거 후 1~64자. 비교는 DB 기본 대조 규칙 적용 | 422 `INVALID_INPUT` |
+| 방 이름 | 필수 문자열. 앞뒤 공백 제거 후 1~100자 | 422 `INVALID_INPUT` |
 | 질문 | 앞뒤 공백 제거 후 빈 값 거부, 최대 `min(MAX_QUESTION_LENGTH, 5000)`자 | 422 `INVALID_INPUT` |
 | AI 성공 답변 | 공백이 아닌 문자열, 최대 5,000자 | 실패 기록 저장 후 502 |
 | 중복 가입 | MySQL 중복 키 오류 | 409 `USER_ALREADY_EXISTS` |
@@ -87,9 +88,9 @@
 |---|---|
 | 가입·로그인 성공 | 성공 메시지 유지. 로그인 응답의 `token`, `token_type` 유지 |
 | 로그인 실패 | HTTP 200 대신 401 반환 |
-| 채팅 요청·성공 | 요청에 `room_id` 필수. HTTP 200 응답은 `room_id`, `answer`, `request_id`, `created_at`. 시각은 UTC `Z` 문자열 |
+| 채팅 요청·성공 | 요청에 `room_id`, `room_name` 필수. HTTP 200 응답은 `room_id`, `room_name`, `answer`, `request_id`, `created_at`. 시각은 UTC `Z` 문자열 |
 | 본인 기록 조회 | `{items, total}` 대신 전체 배열 반환. 페이지네이션 없음 |
-| 기록 항목 | `id`, `room_id`, `question`, `answer`, `status`, `created_at` |
+| 기록 항목 | `id`, `room_id`, `room_name`, `question`, `answer`, `status`, `created_at` |
 | 서비스·검증 오류 | `error_code`, `message`, `request_id`로 통일 |
 | 기본 HTTP 오류 | 404·405 등 프레임워크 응답의 `detail` 형식 유지 |
 | 요청 식별 | `X-Request-ID` 헤더 추가. 오류 응답·로그·채팅 기록에 동일 ID 사용 |
@@ -121,10 +122,12 @@ Uvicorn의 예외 로그는 필터에서 예외 종류와 발생 위치로 변�
 | 위치 | develop 대비 변경 |
 |---|---|
 | `static/js/auth.js` | 인증 오류 메시지 표시. 만료 시각의 타이머·화면 재진입·다른 탭의 토큰 변경에 따라 인증 상태 동기화 |
-| `static/js/chat.js`, `static/js/chat-api.js` | 선택한 방 ID 전송. 오류의 HTTP 상태 전달 및 401 발생 시 해당 요청의 토큰 정리 |
+| `static/js/chat.js`, `static/js/chat-api.js` | 선택한 방 ID·이름 전송. 제목 생성 시 이모지를 포함한 문자 단위로 첫 30자 사용. 오류의 HTTP 상태 전달 및 401 발생 시 해당 요청의 토큰 정리 |
 | `templates/` | 변경 없음 |
 
 대화방 생성·삭제와 화면 기록은 `localStorage`를 사용한다.
+방 이름은 프론트의 `title`을 `room_name`으로 전송하여 `chat_logs`의 각 기록에 저장하고, 성공 응답과 기록 조회에서 반환한다.
+기록의 `room_name`은 요청 당시 값이다. 방 이름 일괄 변경 및 서버 기록으로 화면을 복원하는 기능은 없다.
 화면은 `/api/me/chats`를 호출하지 않으며 서버에는 대화방 CRUD API가 없다.
 AI 문맥은 사용자·방별 기록 기준이다. 새 방에는 새 ID를 사용하며, 방 재선택·새로고침 후에도 저장된 ID를 유지한다.
 화면에서 방을 삭제하면 브라우저 기록만 삭제된다. DB 기록은 남지만 다른 방의 문맥에는 포함되지 않는다.

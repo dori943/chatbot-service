@@ -8,7 +8,8 @@ class ChatLog(Base):
 
     id         = Column(BigInteger(),    primary_key=True        , autoincrement=True)
     user_id    = Column(VARCHAR(50),     ForeignKey("login.id")  , nullable=False)
-    room_id    = Column(VARCHAR(64,      collation="utf8mb4_bin"), nullable=False)
+    room_id    = Column(VARCHAR(64),     nullable=False)
+    room_name  = Column(VARCHAR(100),    nullable=False)
     question   = Column(VARCHAR(5000),   nullable=False)
     answer     = Column(VARCHAR(5000),   nullable=True)
     status     = Column(VARCHAR(20),     nullable=False)

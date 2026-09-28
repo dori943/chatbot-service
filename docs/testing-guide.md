@@ -5,9 +5,10 @@
 | 최초 작성자·작성일 | 이건탁 · 2026-09-22 |
 | 최종 수정일 | 2026-09-28 |
 | 대상 브랜치 | `refactor/bsg-back/app-refactoring` |
-| 실행 검증 | 2026-09-28: MySQL·Chromium pytest 149 passed, 1 deselected / JS 11 passed / 오프라인 AI 스모크 3개 시나리오 통과 |
+| 실행 검증 | 2026-09-28: MySQL·Chromium pytest 156 passed, 1 deselected / JS 11 passed / 오프라인 AI 스모크 3개 시나리오 통과 |
 | Compose 초기화 검증 | 2026-09-28: 기존 컨테이너·DB 볼륨 제거 후 재생성. 필수 `room_id` 컬럼, 웹 접속·가입·로그인·방 ID 전송·입력 검증 확인. 임시 계정 정리 후 계정·대화 기록 0건 |
 | 인증·AI 오류 보완 검증 | 2026-09-28: 브라우저 7개 사례 통과. 재빌드한 Compose 웹에서도 401 후 토큰 제거·비로그인 전환 확인 |
+| 방 이름 저장 검증 | 요청·DB 저장·기록 조회, 후속 질문·새로고침 시 같은 제목 유지 확인. 개발 DB의 방 컬럼은 테이블 기본 대조 규칙 사용 |
 
 실행 검증은 모의 AI 응답을 사용했다. 실제 AI 호출 테스트 1개와 외부 배포 환경은 검증 대상에서 제외했다.
 pytest 실행 시 의존 라이브러리의 사용 중단 예정 경고 3건이 발생했으며, 테스트 실패는 없었다.
@@ -144,23 +145,23 @@ try {
 | 파일 (`tests/`) | 검증 대상 |
 |---|---|
 | `test_auth_dependency.py` | 토큰 누락·만료·위조, 사용자 존재 여부, 인증 설정과 DB 오류 |
-| `test_validation_errors.py` | 방 ID 필수·타입·길이·공백 처리, 질문 경계값, 인증 실패·중복 가입, AI 실패 기록, DB 롤백, 오류 응답 형식 |
-| `test_chat_api.py` | 화면·API 등록, 본인 기록 최신순 조회, 같은 사용자·같은 방의 성공 기록만 문맥에 전달, 방 ID 대소문자 구분 |
+| `test_validation_errors.py` | 방 ID·이름 필수·타입·길이·공백 처리, 이름 저장·조회, 질문 경계값, 인증 실패·중복 가입, AI 실패 기록, DB 롤백, 오류 응답 형식 |
+| `test_chat_api.py` | 화면·API 등록, 본인 기록 최신순 조회, 같은 사용자·같은 방의 성공 기록만 문맥에 전달 |
 | `test_async_chat.py` | AI 대기 중 DB 연결 반환, bcrypt 처리 중 다른 요청, 요청 취소, 롤백 후 재사용, DB 엔진 종료 |
 | `test_logging.py` | 앱 처리 전 수신 로그, 요청 ID 연결·동시 요청 분리, 취소와 완료 구분, 민감정보 제외 |
 | `test_ai_connect.py` | 문맥 순서·길이, AI 오류 분류·대체 모델 호출, 호출 시간 초과와 취소 전파, 키 누락·오류와 생성 한도 종료의 재시도·폴백 차단 |
-| `test_mysql_integration.py` | 초기 테이블과 ORM의 타입·대조 규칙 일치, 5,000자·이모지·시간 정밀도, 외래키 제약 |
+| `test_mysql_integration.py` | 초기 테이블과 ORM의 타입 일치, 5,000자·이모지·시간 정밀도, 외래키 제약 |
 | `test_browser_integration.py` | 로그인·방별 대화·DB 저장, 만료 타이머·401에 따른 비로그인 전환, 이전 요청의 401과 새 토큰 구분, AI 오류 시 로그인 유지·실패 기록 저장 |
 | `test_live_ai.py` | 실제 AI 응답과 테스트 DB 저장·조회 |
-| `chat-api.test.mjs` | 토큰·질문·방 ID 전송, 오류 메시지·HTTP 상태 전달, 취소와 시간 초과 구분 |
+| `chat-api.test.mjs` | 토큰·질문·방 ID·이름 전송, 오류 메시지·HTTP 상태 전달, 취소와 시간 초과 구분 |
 
-화면의 대화방 목록은 브라우저 저장소에서 관리하고, 방 ID를 서버로 전송해 문맥을 구분한다.
+화면의 대화방 목록은 브라우저 저장소에서 관리하고, 방 ID·이름을 서버로 전송해 문맥을 구분하고 제목을 저장한다.
 서버 대화방 CRUD와 화면·서버 기록 동기화는 검증 범위에 포함되지 않는다.
 
 ## 실제 Compose 웹 검증
 
 앱의 `.env`에 DB·인증·AI 설정이 필요하며 실제 질문은 외부 AI를 호출한다.
-`room_id` 컬럼이 없는 기존 개발 DB는 [README의 초기화 절차](../README.md#실행)에 따라 재생성한다.
+`room_id`, `room_name` 컬럼이 없는 기존 개발 DB는 [README의 초기화 절차](../README.md#실행)에 따라 재생성한다.
 2026-09-28 Compose 검증은 AI 호출 전 입력 검증까지 실행했으며, 방별 질문·답변 흐름은 모의 AI를 사용하는 브라우저 통합 테스트에서 검증했다.
 
 ```powershell
@@ -176,7 +177,7 @@ docker compose up --build -d --wait
 |---|---|
 | 게스트 질문 전송 | 로그인 안내 표시, 채팅 요청 미전송 |
 | 회원가입·로그인 | HTTP 200, 사용자 ID 표시 |
-| 로그인 후 질문 전송 | `room_id`와 `question` 전송. HTTP 200, `room_id`, `answer`, `request_id`, `created_at` 반환 및 답변 표시 |
+| 로그인 후 질문 전송 | `room_id`, `room_name`, `question` 전송. HTTP 200, `room_id`, `room_name`, `answer`, `request_id`, `created_at` 반환 및 답변 표시 |
 | 새 방 생성·기존 방 재선택 | 새 방에는 이전 방 문맥 미포함. 기존 방에는 해당 방의 문맥만 전달 |
 | 채팅 응답 비교 | 본문의 `request_id`와 응답 헤더 `X-Request-ID` 일치 |
 | `/docs`에서 로그인 토큰으로 `GET /api/me/chats` 호출 | 본인 기록만 조회, 성공 기록의 `status`는 `success` |

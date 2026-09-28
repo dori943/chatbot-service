@@ -19,9 +19,7 @@ def test_init_sql_matches_orm(database):
         for column in model.__table__.columns:
             found = actual[column.name]
             actual_type = str(found["type"].compile(dialect=engine.dialect)).split(" CHARACTER SET ")[0].split(" COLLATE ")[0]
-            assert actual_type == str(column.type.compile(dialect=engine.dialect)).split(" COLLATE ")[0]
-            if getattr(column.type, "collation", None):
-                assert found["type"].collation == column.type.collation
+            assert actual_type == str(column.type.compile(dialect=engine.dialect))
             assert found["nullable"] == column.nullable
             assert getattr(found["type"], "fsp", None) == getattr(column.type, "fsp", None)
     fk = inspector.get_foreign_keys("chat_logs")[0]
@@ -33,6 +31,7 @@ def test_mysql_5000_character_boundary(database):
     with database() as db:
         row = ChatLog(
             room_id    = "room-a",
+            room_name  = "Test room",
             user_id    = "alice",
             question   = "가" * 5000,
             answer     = "🙂" * 5000,
@@ -55,6 +54,7 @@ def test_mysql_rejects_chat_for_missing_user(database):
     with database() as db:
         db.add(ChatLog(
             room_id    = "room-a",
+            room_name  = "Test room",
             user_id    = "missing-user",
             question   = "question",
             status     = "error",

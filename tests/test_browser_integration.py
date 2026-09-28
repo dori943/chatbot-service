@@ -91,6 +91,8 @@ def test_login_room_context_and_owner_switch(database, monkeypatch, browser_page
         expect(page.locator("#send")).to_be_enabled()
         sent = result.value.request.post_data_json
         assert result.value.json()["room_id"] == sent["room_id"]
+        assert result.value.json()["room_name"] == sent["room_name"]
+        assert sent["room_name"] == page.locator("#conversation-title").inner_text()
         return sent["room_id"]
 
     first_room = send_question("브라우저 질문")
@@ -99,6 +101,7 @@ def test_login_room_context_and_owner_switch(database, monkeypatch, browser_page
     with database() as db:
         row = db.query(ChatLog).one()
         assert (row.user_id, row.room_id) == ("이건탁", first_room)
+        assert row.room_name == "브라우저 질문"
 
     assert send_question("같은 방 후속 질문") == first_room
     first_turn = {"question": "브라우저 질문", "answer": "브라우저 통합 테스트 답변"}
@@ -120,10 +123,18 @@ def test_login_room_context_and_owner_switch(database, monkeypatch, browser_page
     assert [turn["question"] for turn in histories[-1]] == [
         "브라우저 질문", "같은 방 후속 질문", "기존 방 재개",
     ]
+    with database() as db:
+        assert {row.room_name for row in db.query(ChatLog).filter_by(room_id=first_room)} == {"브라우저 질문"}
+        assert db.query(ChatLog).filter_by(room_id=second_room).one().room_name == "새 방 질문"
 
     page.locator(".delete-chat").click()
     assert send_question("삭제 후 새 질문") not in (first_room, second_room)
     assert histories[-1] == []
+    page.locator("[data-new]").first.click()
+    emoji_title = "가" * 29 + "🙂"
+    emoji_room = send_question(emoji_title + " 제목 이후 질문")
+    with database() as db:
+        assert db.query(ChatLog).filter_by(room_id=emoji_room).one().room_name == emoji_title
     page.locator(".login-button").click()
     expect(page.locator("#header-user")).to_be_hidden()
     expect(page.locator(".message.assistant")).to_have_count(0)

@@ -81,8 +81,6 @@ def build_contents(
 
 @lru_cache(maxsize=1)
 def _client() -> genai.Client:
-    if not AI_API_KEY:
-        raise RuntimeError("AI_API_KEY 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
     return genai.Client(api_key=AI_API_KEY)
 
 
@@ -93,9 +91,22 @@ def _classify(exc: Exception) -> str:
 
     if isinstance(exc, errors.APIError):
         code = getattr(exc, "code", None)
+        if code in (401, 403):
+            return ErrorCode.CONFIG
+        if code == 400:
+            # 키 오류는 HTTP 400의 구조화된 reason으로도 반환된다.
+            details = getattr(exc, "details", {})
+            if isinstance(details, dict):
+                error = details.get("error", details)
+                if isinstance(error, dict):
+                    for detail in error.get("details", []) or []:
+                        if isinstance(detail, dict) and str(detail.get("reason", "")).startswith("API_KEY_"):
+                            return ErrorCode.CONFIG
+            if "api key" in str(getattr(exc, "message", "") or "").lower():
+                return ErrorCode.CONFIG
         if code == 429:
             return ErrorCode.RATE_LIMIT
-        if code in (400, 403, 404):
+        if code in (400, 404):
             return ErrorCode.BAD_REQUEST
         if isinstance(code, int) and code >= 500:
             return ErrorCode.UPSTREAM
@@ -112,10 +123,6 @@ def _classify(exc: Exception) -> str:
 
 def _extract_answer(response: Any) -> tuple[str, str | None]:
     """응답에서 텍스트를 꺼낸다. 실패 시 (빈 문자열, 에러코드)."""
-    text = (getattr(response, "text", None) or "").strip()
-    if text:
-        return text, None
-
     # 안전 필터에 걸린 경우 prompt_feedback.block_reason 이 채워진다
     feedback = getattr(response, "prompt_feedback", None)
     if feedback is not None and getattr(feedback, "block_reason", None):
@@ -124,9 +131,14 @@ def _extract_answer(response: Any) -> tuple[str, str | None]:
     candidates = getattr(response, "candidates", None) or []
     if candidates:
         reason = str(getattr(candidates[0], "finish_reason", "") or "")
+        if "MAX_TOKENS" in reason.upper():
+            return "", ErrorCode.TOKEN_LIMIT
         if "SAFETY" in reason.upper() or "BLOCK" in reason.upper():
             return "", ErrorCode.BLOCKED
 
+    text = (getattr(response, "text", None) or "").strip()
+    if text:
+        return text, None
     return "", ErrorCode.EMPTY_RESPONSE
 
 
@@ -178,6 +190,8 @@ async def _call_once(
     asyncio.wait_for 로 타임아웃을 직접 강제한다.
     SDK 내부 타임아웃 동작에 의존하지 않기 위함이다.
     """
+    if not AI_API_KEY or not AI_API_KEY.strip():
+        return None, ErrorCode.CONFIG, None
     config = _build_config(payload, timeout)
 
     response = await asyncio.wait_for(
@@ -202,7 +216,7 @@ async def generate_answer(
     user_id: str | None = None,
     request_id: str | None = None,
 ) -> AIResult:
-    """기존 재시도·폴백 정책으로 AI 응답을 생성한다.
+    """오류 분류에 따라 재시도·폴백을 적용해 AI 응답을 생성한다.
 
     AI 호출 실패는 AIResult로 반환하고, 작업 취소는 호출자에게 전달한다.
     입력 검증·DB 저장·HTTP 오류 변환은 chat_main에서 처리한다.

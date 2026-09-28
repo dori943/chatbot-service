@@ -8,18 +8,23 @@ export function getAccessToken() {
   }
 }
 
-export function getAuthenticatedId() {
+function getTokenClaims() {
   try {
     const payload = getAccessToken()?.split('.')[1];
     if (!payload) return null;
     // JWT의 UTF-8 사용자 ID를 복원한다. 실제 서명 검증은 백엔드가 수행한다.
     const bytes = Uint8Array.from(atob(payload.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
     const claims = JSON.parse(new TextDecoder().decode(bytes));
-    if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now()) return null;
-    return typeof claims.id === 'string' && claims.id ? claims.id : null;
+    return claims;
   } catch (_) {
     return null;
   }
+}
+
+export function getAuthenticatedId() {
+  const claims = getTokenClaims();
+  if (!Number.isFinite(claims?.exp) || claims.exp * 1000 <= Date.now()) return null;
+  return typeof claims.id === 'string' && claims.id ? claims.id : null;
 }
 
 function getElement(id) {
@@ -28,6 +33,7 @@ function getElement(id) {
 }
 
 let signup = false;
+let expiryTimer;
 
 function renderAuthUI() {
   const id = getAuthenticatedId();
@@ -45,13 +51,29 @@ function notifyAuthChange() {
   window.dispatchEvent(new CustomEvent('authchange', { detail: { id: getAuthenticatedId() } }));
 }
 
+function syncAuthState() {
+  clearTimeout(expiryTimer);
+  if (getAccessToken() && !getAuthenticatedId()) localStorage.removeItem('access_token');
+  renderAuthUI();
+  notifyAuthChange();
+  const claims = getTokenClaims();
+  if (getAuthenticatedId()) {
+    expiryTimer = setTimeout(syncAuthState, Math.min(claims.exp * 1000 - Date.now(), 2_147_483_647));
+  }
+}
+
+export function clearAuth(token = getAccessToken()) {
+  // 이전 요청의 401이 새로 로그인한 토큰까지 삭제하지 않게 한다.
+  if (token !== getAccessToken()) return;
+  if (token) localStorage.removeItem('access_token');
+  syncAuthState();
+}
+
 // 인증 모달의 입력과 탭 전환을 처리합니다.
 function bindAuthEvents() {
   document.querySelectorAll('[data-auth]').forEach(button => button.addEventListener('click', () => {
     if (getAuthenticatedId()) {
-      localStorage.removeItem('access_token');
-      renderAuthUI();
-      notifyAuthChange();
+      clearAuth();
       return;
     }
     getElement('auth-status').textContent = '';
@@ -107,8 +129,7 @@ function bindAuthEvents() {
         localStorage.setItem('access_token', result.token);
         getElement('auth-form').reset();
         getElement('auth-dialog').close();
-        renderAuthUI();
-        notifyAuthChange();
+        syncAuthState();
       } else {
         status.textContent = result.message || '로그인에 실패했습니다.';
       }
@@ -118,10 +139,13 @@ function bindAuthEvents() {
   });
 }
 
-renderAuthUI();
+syncAuthState();
 bindAuthEvents();
 window.addEventListener('storage', event => {
   if (event.key !== 'access_token') return;
-  renderAuthUI();
-  notifyAuthChange();
+  syncAuthState();
+});
+window.addEventListener('focus', syncAuthState);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) syncAuthState();
 });

@@ -67,6 +67,8 @@ class ErrorCode:
     BAD_REQUEST      = "AI_BAD_REQUEST"       # 잘못된 모델명, 잘못된 파라미터 등
     BLOCKED          = "AI_BLOCKED"           # 안전 필터에 의해 차단됨
     EMPTY_RESPONSE   = "AI_EMPTY_RESPONSE"
+    TOKEN_LIMIT      = "AI_TOKEN_LIMIT"
+    CONFIG           = "AI_CONFIG_ERROR"
     ANSWER_TOO_LONG  = "AI_ANSWER_TOO_LONG"
     UNKNOWN          = "AI_UNKNOWN_ERROR"
     INVALID_INPUT    = "INVALID_INPUT"
@@ -85,14 +87,18 @@ USER_MESSAGES: dict[str, str] = {
     ErrorCode.BAD_REQUEST     : "요청을 처리할 수 없어요. 잠시 후 다시 시도해 주세요.",
     ErrorCode.BLOCKED         : "이 질문에는 답변할 수 없어요. 다른 방식으로 질문해 주세요.",
     ErrorCode.EMPTY_RESPONSE  : "답변을 생성하지 못했어요. 질문을 조금 바꿔서 다시 시도해 주세요.",
+    ErrorCode.TOKEN_LIMIT     : "AI 응답이 생성 한도에 도달해 완료되지 못했습니다. 관리자에게 문의해 주세요.",
+    ErrorCode.CONFIG         : "AI 서비스 설정 문제로 답변을 생성할 수 없습니다. 관리자에게 문의해 주세요.",
     ErrorCode.ANSWER_TOO_LONG : "답변이 5,000자를 초과했습니다. 더 짧은 답변을 요청해 주세요.",
     ErrorCode.UNKNOWN         : "일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요.",
 }
 
 AI_ERROR_STATUS = {
-    ErrorCode.TIMEOUT    : 504,
-    ErrorCode.RATE_LIMIT : 429,
-    ErrorCode.BLOCKED    : 422,
+    ErrorCode.TIMEOUT     : 504,
+    ErrorCode.RATE_LIMIT  : 429,
+    ErrorCode.BLOCKED     : 422,
+    ErrorCode.CONFIG     : 503,
+    ErrorCode.TOKEN_LIMIT : 502,
 }
 
 RETRY_SAME_MODEL = {ErrorCode.RATE_LIMIT, ErrorCode.CONNECTION}

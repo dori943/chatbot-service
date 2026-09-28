@@ -28,6 +28,8 @@ def prevent_accidental_ai_calls(request, monkeypatch):
     if request.node.get_closest_marker("live_ai") and os.getenv("RUN_LIVE_AI") == "1":
         return
 
+    monkeypatch.setattr(AI_connect, "AI_API_KEY", "test-only-no-network")
+
     def forbidden_client():
         pytest.fail("Unexpected external AI call; mock the AI or explicitly enable the live test")
 

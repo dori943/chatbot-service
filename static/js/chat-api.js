@@ -32,7 +32,9 @@ export async function requestReply(question, roomId, token, signal) {
         422: '질문 내용을 확인해 주세요. 질문은 5,000자 이내로 입력해 주세요.',
         429: '요청이 많습니다. 잠시 후 다시 시도해 주세요.',
       };
-      throw new Error(message || fallback[response.status] || '서버 오류로 응답을 받지 못했습니다.');
+      const error = new Error(message || fallback[response.status] || '서버 오류로 응답을 받지 못했습니다.');
+      error.status = response.status;
+      throw error;
     }
     if (typeof data?.answer !== 'string' || !data.answer.trim()) {
       throw new Error('답변을 불러오지 못했습니다. 다시 시도해 주세요.');

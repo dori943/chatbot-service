@@ -94,7 +94,7 @@
 | 기본 HTTP 오류 | 404·405 등 프레임워크 응답의 `detail` 형식 유지 |
 | 요청 식별 | `X-Request-ID` 헤더 추가. 오류 응답·로그·채팅 기록에 동일 ID 사용 |
 
-AI 오류의 HTTP 상태는 시간 초과 504, 호출 제한 429, 안전 필터 차단 422, 나머지 AI 오류 502이다.
+AI 오류의 HTTP 상태는 시간 초과 504, 호출 제한 429, 안전 필터 차단 422, 키·권한 설정 오류 503, 나머지 AI 오류 502이다.
 서비스는 dict·list를 반환하거나 `APIError`를 발생시키며, `app/core/errors.py`의 예외 핸들러가 오류 응답을 구성한다.
 `ChatResponse`, `ChatLogItem`, `ErrorResponse`는 사용하지 않는다.
 
@@ -120,14 +120,16 @@ Uvicorn의 예외 로그는 필터에서 예외 종류와 발생 위치로 변�
 
 | 위치 | develop 대비 변경 |
 |---|---|
-| `static/js/auth.js` | 인증 실패 응답의 `message`가 문자열이면 화면에 표시. 그 외에는 기본 오류 문구 표시 |
-| `static/js/chat.js`, `static/js/chat-api.js` | 선택한 방의 ID를 `room_id`로 질문과 함께 전송 |
+| `static/js/auth.js` | 인증 오류 메시지 표시. 만료 시각의 타이머·화면 재진입·다른 탭의 토큰 변경에 따라 인증 상태 동기화 |
+| `static/js/chat.js`, `static/js/chat-api.js` | 선택한 방 ID 전송. 오류의 HTTP 상태 전달 및 401 발생 시 해당 요청의 토큰 정리 |
 | `templates/` | 변경 없음 |
 
 대화방 생성·삭제와 화면 기록은 `localStorage`를 사용한다.
 화면은 `/api/me/chats`를 호출하지 않으며 서버에는 대화방 CRUD API가 없다.
 AI 문맥은 사용자·방별 기록 기준이다. 새 방에는 새 ID를 사용하며, 방 재선택·새로고침 후에도 저장된 ID를 유지한다.
 화면에서 방을 삭제하면 브라우저 기록만 삭제된다. DB 기록은 남지만 다른 방의 문맥에는 포함되지 않는다.
+토큰 만료·401 처리 시 `authchange` 이벤트로 사용자 표시와 채팅 화면을 갱신한다.
+이전 요청의 토큰이 현재 저장된 토큰과 다르면 현재 토큰은 삭제하지 않는다. AI 오류인 502·503 응답은 로그인 상태를 유지한다.
 
 ## 3. AI
 
@@ -146,8 +148,20 @@ AI 문맥은 사용자·방별 기록 기준이다. 새 방에는 새 ID를 사�
 호출 인터페이스는 `generate_answer(question, history=None, *, user_id=None, request_id=None) -> AIResult`이다.
 입력 검증·DB 저장·HTTP 오류 변환은 호출 서비스의 책임이며 AI 호출 결과는 `AIResult`로 전달한다.
 
-AI에 전달된 문맥의 턴 수·길이 제한, 재시도 대상, 폴백 판단, 결과 모델명 처리, 클라이언트 캐시는 develop의 동작을 유지한다.
+AI에 전달된 문맥의 턴 수·길이 제한, 결과 모델명 처리, 클라이언트 캐시는 develop의 동작을 유지한다.
+재시도·폴백은 기존 대상 오류에 적용하며, 키·권한 설정 오류와 생성 한도 종료는 별도로 분류해 즉시 중단한다.
 AI 처리 로그는 `app/core/logging.py`의 `log_event()`를 사용한다.
+
+| 조건 | 오류·HTTP | 처리 |
+|---|---|---|
+| `AI_API_KEY` 누락·빈 값·공백 | `AI_CONFIG_ERROR` · 503 | SDK 클라이언트 생성·호출 없이 실패 |
+| 공급자 HTTP 401·403 또는 400의 `API_KEY_*` reason·API key 오류 메시지 | `AI_CONFIG_ERROR` · 503 | 첫 오류 후 재시도·폴백 중단 |
+| 응답의 `finish_reason=MAX_TOKENS` | `AI_TOKEN_LIMIT` · 502 | 빈 응답·부분 응답 모두 실패 처리. 재시도·폴백 없음 |
+
+세 경우 모두 `answer=null`인 실패 기록을 저장하고 사용자에게 설정 확인 안내를 반환한다.
+일반 400·404는 기존 `AI_BAD_REQUEST` 분류와 폴백 정책을 유지한다.
+공급자 응답 기준: [Gemini API 오류 명세](https://ai.google.dev/gemini-api/docs/generate-content/api-errors),
+[FinishReason](https://ai.google.dev/api/generate-content#FinishReason).
 
 | 제한 | 적용 위치 |
 |---|---|

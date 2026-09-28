@@ -1,11 +1,11 @@
 """Gemini 네트워크 호출 없이 문맥·오류 분류·폴백을 검증한다."""
 import asyncio
 from types            import SimpleNamespace
-from unittest.mock    import AsyncMock
+from unittest.mock    import AsyncMock, Mock
 
 import httpx
 import pytest
-from google.genai     import errors
+from google.genai     import errors, types
 
 from app.core.errors  import APIError, ErrorCode
 from app.schemas.chat import ChatRequest
@@ -54,7 +54,11 @@ def test_context_limit_discards_oldest_turn_without_truncating_question(monkeypa
     (httpx.ConnectError("private"), ErrorCode.CONNECTION),
     (errors.APIError(429, {}), ErrorCode.RATE_LIMIT),
     (errors.APIError(400, {}), ErrorCode.BAD_REQUEST),
-    (errors.APIError(403, {}), ErrorCode.BAD_REQUEST),
+    (errors.APIError(401, {}), ErrorCode.CONFIG),
+    (errors.APIError(403, {}), ErrorCode.CONFIG),
+    (errors.APIError(400, {"error": {"details": [{"reason": "API_KEY_INVALID"}]}}), ErrorCode.CONFIG),
+    (errors.APIError(400, {"details": [{"reason": "API_KEY_SERVICE_BLOCKED"}]}), ErrorCode.CONFIG),
+    (errors.APIError(400, {"message": "API key not valid. Please pass a valid API key."}), ErrorCode.CONFIG),
     (errors.APIError(404, {}), ErrorCode.BAD_REQUEST),
     (errors.APIError(503, {}), ErrorCode.UPSTREAM),
     (RuntimeError("private"), ErrorCode.UNKNOWN),
@@ -68,6 +72,9 @@ def test_classifies_provider_errors(exception, code):
     (SimpleNamespace(text="", prompt_feedback=SimpleNamespace(block_reason="SAFETY")), "", ErrorCode.BLOCKED),
     (SimpleNamespace(text=None, candidates=[SimpleNamespace(finish_reason="SAFETY")]), "", ErrorCode.BLOCKED),
     (SimpleNamespace(text=" ", candidates=[]), "", ErrorCode.EMPTY_RESPONSE),
+    (SimpleNamespace(text="partial", candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")]), "", ErrorCode.TOKEN_LIMIT),
+    (SimpleNamespace(text=None, candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")]), "", ErrorCode.TOKEN_LIMIT),
+    (SimpleNamespace(text="partial", candidates=[SimpleNamespace(finish_reason="SAFETY")]), "", ErrorCode.BLOCKED),
 ])
 def test_extracts_answer_or_block_reason(response, answer, code):
     assert ai._extract_answer(response) == (answer, code)
@@ -98,6 +105,7 @@ async def test_primary_success_preserves_usage_metadata(ai_settings, monkeypatch
     (ErrorCode.BAD_REQUEST, True), (ErrorCode.TIMEOUT, True),
     (ErrorCode.UPSTREAM, True), (ErrorCode.EMPTY_RESPONSE, True),
     (ErrorCode.BLOCKED, False), (ErrorCode.UNKNOWN, True),
+    (ErrorCode.CONFIG, False), (ErrorCode.TOKEN_LIMIT, False),
 ])
 async def test_fallback_policy(ai_settings, monkeypatch, code, fallback):
     call = AsyncMock(side_effect=[(None, code, None), ("recovered", None, None)])
@@ -177,3 +185,43 @@ async def test_cancellation_propagates_without_retry(ai_settings, monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await ai.generate_answer("question")
     call.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key", [None, "", "   "], ids=["missing", "empty", "blank"])
+async def test_missing_key_stops_before_sdk_without_fallback(ai_settings, monkeypatch, key):
+    monkeypatch.setattr(ai, "AI_API_KEY", key)
+    monkeypatch.setattr(ai, "AI_MAX_RETRIES", 2)
+    client = Mock(side_effect=AssertionError("SDK must not be constructed without a key"))
+    monkeypatch.setattr(ai, "_client", client)
+    result = await ai.generate_answer("question")
+    assert (result.status, result.error_code, result.fallback_used) == ("error", ErrorCode.CONFIG, False)
+    client.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", [
+    errors.APIError(401, {}), errors.APIError(403, {}),
+    errors.APIError(400, {"error": {"details": [{"reason": "API_KEY_INVALID"}]}}),
+])
+async def test_invalid_key_stops_after_one_sdk_call(ai_settings, monkeypatch, failure):
+    monkeypatch.setattr(ai, "AI_MAX_RETRIES", 2)
+    generate = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(ai, "_client", lambda: SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate))))
+    result = await ai.generate_answer("question")
+    assert (result.status, result.error_code, result.fallback_used) == ("error", ErrorCode.CONFIG, False)
+    generate.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("answer", ["", "partial answer"])
+async def test_max_tokens_discards_partial_response_without_retry(ai_settings, monkeypatch, answer):
+    monkeypatch.setattr(ai, "AI_MAX_RETRIES", 2)
+    response = types.GenerateContentResponse(candidates=[types.Candidate(
+        content=types.Content(parts=[types.Part(text=answer)]), finish_reason=types.FinishReason.MAX_TOKENS,
+    )])
+    generate = AsyncMock(return_value=response)
+    monkeypatch.setattr(ai, "_client", lambda: SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate))))
+    result = await ai.generate_answer("question")
+    assert (result.status, result.error_code, result.answer, result.fallback_used) == ("error", ErrorCode.TOKEN_LIMIT, None, False)
+    generate.assert_awaited_once()

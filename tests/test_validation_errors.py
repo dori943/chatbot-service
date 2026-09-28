@@ -73,6 +73,7 @@ def test_question_boundary_normalization_and_configured_limit(client, database, 
     ("AI_BLOCKED", "error", 422), ("AI_CONNECTION_ERROR", "error", 502),
     ("AI_UPSTREAM_ERROR", "error", 502), ("AI_BAD_REQUEST", "error", 502),
     ("AI_EMPTY_RESPONSE", "error", 502), ("AI_UNKNOWN_ERROR", "error", 502),
+    ("AI_TOKEN_LIMIT", "error", 502), ("AI_CONFIG_ERROR", "error", 503),
 ])
 def test_ai_failure_is_saved_before_error_response(client, database, auth_headers, ai_mock, code, status, http):
     ai_mock.side_effect = None

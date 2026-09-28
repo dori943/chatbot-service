@@ -24,7 +24,7 @@ for (const status of [401, 422, 429, 502, 503, 504]) {
     t.mock.method(globalThis, 'fetch', async () => Response.json(
       { error_code: 'TEST_ERROR', message: '테스트 오류 안내' }, { status },
     ));
-    await assert.rejects(requestReply('hi', 'room-a', 'token'), /테스트 오류 안내/);
+    await assert.rejects(requestReply('hi', 'room-a', 'token'), { message: '테스트 오류 안내', status });
   });
 }
 

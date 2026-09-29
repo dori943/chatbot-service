@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/static/css/fonts.css">
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/style.css">
+    <!-- 클라이언트 사이드 로직 및 DOM 이벤트 핸들링을 위한 자바스크립트 모듈 로드 -->
     <script type="module" src="/static/js/chat.js"></script>
     <script type="module" src="/static/js/auth.js"></script>
   </head>
@@ -136,6 +137,7 @@
       </div>
       <div class="composer-dock">
         <p id="status" class="status" role="status"></p>
+        <!-- 자바스크립트에서 폼 제출(Submit) 이벤트를 가로채어(Intercept) 비동기 통신(AJAX/Fetch)으로 처리하기 위한 타겟 폼 -->
         <form id="chat-form" class="composer">
           <label class="sr-only" for="question">메시지 입력</label>
           <textarea id="question" placeholder="무엇이든 물어보세요" rows="2" maxlength="5000" required></textarea>

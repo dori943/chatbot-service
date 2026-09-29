@@ -210,8 +210,10 @@ function switchChatOwner(id) {
   renderChat();
 }
 
-// 질문 전송과 취소, 실패 시 대화 복원을 처리합니다.
+
+// 폼 제출 이벤트 핸들러: API 통신 및 UI 상태 업데이트
 async function handleSubmit(event) {
+  // 폼 제출 시 발생하는 브라우저의 기본 동작(페이지 새로고침)을 방지(Intercept)
   event.preventDefault();
   if (pending) return;
   if (!getAuthenticatedId()) {
@@ -289,8 +291,10 @@ async function handleSubmit(event) {
   }
 }
 
-// 채팅 이벤트 연결
+
+// DOM 이벤트 바인딩
 function bindChatEvents() {
+  // 폼 제출(submit) 이벤트를 감지하여 handleSubmit 비동기 함수로 처리를 위임
   getElement('chat-form').addEventListener('submit', handleSubmit);
   getElement('stop').addEventListener('click', () => pending?.abort());
   getElement('question').addEventListener('input', updateInput);

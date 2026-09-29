@@ -101,6 +101,25 @@ export function clearAuth(token = getAccessToken(), reason = 'unauthorized') {
   syncAuthState(reason);
 }
 
+function setAuthMode(value) {
+  signup = value;
+  document.querySelectorAll('[data-tab]').forEach(tab => tab.classList.toggle('active', (tab.dataset.tab === 'signup') === signup));
+  getElement('auth-title').textContent = signup ? '새로운 대화를 시작해요.' : '다시 만나 반가워요.';
+  getElement('confirm-wrap').hidden = !signup;
+  getElement('auth-confirm').required = signup;
+  getElement('auth-password').autocomplete = signup ? 'new-password' : 'current-password';
+  getElement('auth-password').placeholder = signup ? '8자 이상, UTF-8 72바이트 이내' : '비밀번호를 입력하세요';
+  document.querySelector('.auth-submit').textContent = signup ? '회원가입' : '로그인';
+  getElement('auth-status').textContent = '';
+}
+
+export function openLogin() {
+  cancelAuthRequest();
+  setAuthMode(false);
+  if (!getElement('auth-dialog').open) getElement('auth-dialog').showModal();
+  getElement('auth-name').focus();
+}
+
 // 인증 모달의 입력과 탭 전환을 처리합니다.
 function bindAuthEvents() {
   document.querySelectorAll('[data-auth]').forEach(button => button.addEventListener('click', () => {
@@ -108,9 +127,7 @@ function bindAuthEvents() {
       clearAuth(getAccessToken(), 'logout');
       return;
     }
-    getElement('auth-status').textContent = '';
-    getElement('auth-dialog').showModal();
-    getElement('auth-name').focus();
+    openLogin();
   }));
   document.querySelector('[data-close]').addEventListener('click', () => {
     cancelAuthRequest();
@@ -125,15 +142,7 @@ function bindAuthEvents() {
   });
   document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => {
     if (pendingAuth) return;
-    signup = button.dataset.tab === 'signup';
-    document.querySelectorAll('[data-tab]').forEach(tab => tab.classList.toggle('active', tab === button));
-    getElement('auth-title').textContent = signup ? '새로운 대화를 시작해요.' : '다시 만나 반가워요.';
-    getElement('confirm-wrap').hidden = !signup;
-    getElement('auth-confirm').required = signup;
-    getElement('auth-password').autocomplete = signup ? 'new-password' : 'current-password';
-    getElement('auth-password').placeholder = signup ? '8자 이상, UTF-8 72바이트 이내' : '비밀번호를 입력하세요';
-    document.querySelector('.auth-submit').textContent = signup ? '회원가입' : '로그인';
-    getElement('auth-status').textContent = '';
+    setAuthMode(button.dataset.tab === 'signup');
   }));
   getElement('auth-form').addEventListener('submit', async event => {
     event.preventDefault();

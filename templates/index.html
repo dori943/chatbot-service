@@ -135,10 +135,9 @@
         <div id="transcript" class="transcript" aria-live="polite" aria-label="대화 내용" hidden></div>
       </div>
       <div class="composer-dock">
-        <p id="status" class="status" role="status"></p>
         <form id="chat-form" class="composer">
           <label class="sr-only" for="question">메시지 입력</label>
-          <textarea id="question" placeholder="무엇이든 물어보세요" rows="2" required></textarea>
+          <textarea id="question" placeholder="무엇이든 물어보세요" rows="2" aria-describedby="status" required></textarea>
           <div class="composer-tools">
             <span class="input-hint">Enter로 전송 · Shift+Enter로 줄바꿈</span>
             <span id="char-count">0 / 5,000</span>
@@ -150,7 +149,13 @@
             <button id="stop" type="button" class="stop-button" hidden>중지</button>
           </div>
         </form>
-        <p class="disclaimer">AI의 답변은 틀릴 수 있습니다. 중요한 정보는 다시 확인하세요.</p>
+        <div class="chat-feedback">
+          <p id="status" class="status" role="status"></p>
+          <small id="request-id" class="request-id" hidden></small>
+          <button id="retry" type="button" class="status-action" hidden>다시 시도</button>
+          <button id="reauth" type="button" class="status-action" hidden>로그인</button>
+        </div>
+        <p class="disclaimer">AI의 답변은 틀릴 수 있습니다. 중요한 정보는 다시 확인하세요.<br>기본 설정에서는 최근 5턴의 대화를 참고합니다. 오래된 내용은 질문에 다시 적어 주세요.</p>
       </div>
     </main>
     <dialog id="auth-dialog">

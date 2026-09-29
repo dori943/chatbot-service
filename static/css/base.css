@@ -417,6 +417,43 @@ h1 em {
   margin: 8px 0
 }
 
+.status[data-state="loading"] {
+  display: flex;
+  align-items: center;
+  gap: 8px
+}
+
+.status[data-state="loading"]::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: waiting 1s linear infinite
+}
+
+@keyframes waiting {
+  to { transform: rotate(360deg) }
+}
+
+.request-id {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  user-select: all;
+  margin: 4px 0
+}
+
+.status-action {
+  border: 1px solid var(--line);
+  background: var(--active);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 11px
+}
+
 .composer {
   background: var(--surface);
   border: 1px solid var(--line);

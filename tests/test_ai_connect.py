@@ -1,5 +1,8 @@
 """Gemini 네트워크 호출 없이 문맥·오류 분류·폴백을 검증한다."""
 import asyncio
+import os
+import subprocess
+import sys
 from types            import SimpleNamespace
 from unittest.mock    import AsyncMock, Mock
 
@@ -225,3 +228,109 @@ async def test_max_tokens_discards_partial_response_without_retry(ai_settings, m
     result = await ai.generate_answer("question")
     assert (result.status, result.error_code, result.answer, result.fallback_used) == ("error", ErrorCode.TOKEN_LIMIT, None, False)
     generate.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("code,retries_primary", [
+    (ErrorCode.UPSTREAM, True), (ErrorCode.RATE_LIMIT, True), (ErrorCode.CONNECTION, True),
+    (ErrorCode.EMPTY_RESPONSE, False), (ErrorCode.BAD_REQUEST, False),
+], ids=["upstream", "rate-limit", "connection", "empty", "bad-request"])
+async def test_transient_failures_retry_primary_before_falling_back(
+    ai_settings, monkeypatch, code, retries_primary,
+):
+    """제공사 5xx는 일시적이므로 폴백보다 주 모델 재시도를 먼저 쓴다."""
+    monkeypatch.setattr(ai, "AI_MAX_RETRIES", 1)
+    monkeypatch.setattr(ai.asyncio, "sleep", AsyncMock())
+    call = AsyncMock(side_effect=[(None, code, None), ("recovered", None, None)])
+    monkeypatch.setattr(ai, "_call_once", call)
+
+    result = await ai.generate_answer("question")
+
+    assert (result.status, result.answer) == ("success", "recovered")
+    assert [entry.args[0] for entry in call.await_args_list] == [
+        "primary", "primary" if retries_primary else "fallback",
+    ]
+    assert result.fallback_used is not retries_primary
+
+
+@pytest.mark.anyio
+async def test_primary_retry_exhausted_still_falls_back(ai_settings, monkeypatch):
+    """주 모델 재시도가 모두 실패하면 폴백 모델까지 이어서 시도한다."""
+    monkeypatch.setattr(ai, "AI_MAX_RETRIES", 1)
+    monkeypatch.setattr(ai.asyncio, "sleep", AsyncMock())
+    call = AsyncMock(side_effect=[
+        (None, ErrorCode.UPSTREAM, None),
+        (None, ErrorCode.UPSTREAM, None),
+        ("recovered", None, None),
+    ])
+    monkeypatch.setattr(ai, "_call_once", call)
+
+    result = await ai.generate_answer("question")
+
+    assert (result.status, result.answer, result.fallback_used) == ("success", "recovered", True)
+    assert [entry.args[0] for entry in call.await_args_list] == ["primary", "primary", "fallback"]
+
+
+@pytest.mark.anyio
+async def test_call_deadline_never_drops_below_provider_minimum(ai_settings, monkeypatch):
+    """남은 예산이 적어도 제공사 하한 미만으로 호출하지 않는다.
+
+    하한보다 짧은 deadline은 400 INVALID_ARGUMENT로 거부되므로,
+    예산을 깎아 호출하면 폴백이 확정적으로 실패한다.
+    """
+    monkeypatch.setattr(ai, "AI_MAX_RETRIES", 1)
+    monkeypatch.setattr(ai, "AI_TOTAL_TIMEOUT_SECONDS", 0.2)  # 사실상 예산 없음
+    monkeypatch.setattr(ai.asyncio, "sleep", AsyncMock())
+    call = AsyncMock(return_value=(None, ErrorCode.UPSTREAM, None))
+    monkeypatch.setattr(ai, "_call_once", call)
+
+    await ai.generate_answer("question")
+
+    deadlines = [entry.args[2] for entry in call.await_args_list]
+    assert deadlines, "주 모델은 예산과 무관하게 한 번은 호출한다"
+    from app.core.config import AI_MIN_DEADLINE_SECONDS
+    assert all(value >= AI_MIN_DEADLINE_SECONDS for value in deadlines), deadlines
+
+
+@pytest.mark.anyio
+async def test_skipped_fallback_is_not_reported_as_the_failed_model(ai_settings, monkeypatch):
+    """폴백을 건너뛰면 실제로 호출한 주 모델이 기록되어야 한다."""
+    monkeypatch.setattr(ai, "MIN_FALLBACK_BUDGET_SECONDS", float("inf"))
+    call = AsyncMock(return_value=(None, ErrorCode.UPSTREAM, None))
+    monkeypatch.setattr(ai, "_call_once", call)
+
+    result = await ai.generate_answer("question")
+
+    assert [entry.args[0] for entry in call.await_args_list] == ["primary"]
+    assert result.model == "primary"
+    assert result.fallback_used is False
+
+
+def test_zero_context_turns_disables_history(monkeypatch):
+    """AI_CONTEXT_TURNS=0 은 문맥을 쓰지 않겠다는 뜻이다. turns[-0:] 는 전체를 남긴다."""
+    history = [{"question": f"q{index}", "answer": f"a{index}"} for index in range(10)]
+    monkeypatch.setattr(ai, "AI_CONTEXT_TURNS", 0)
+    payload = ai.build_contents("new", history)
+    assert payload.turns_used == 0
+    assert [entry["parts"][0]["text"] for entry in payload.contents] == ["new"]
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "not-a-number"], ids=["empty", "blank", "invalid"])
+def test_blank_numeric_setting_falls_back_to_default(monkeypatch, raw):
+    """`.env`가 빈 값으로 기본값을 쓰도록 안내하므로 숫자 항목도 죽지 않아야 한다."""
+    from app.core.config import _num
+    monkeypatch.setenv("SOME_NUMERIC_SETTING", raw)
+    assert _num("SOME_NUMERIC_SETTING", "7", int) == 7
+    assert _num("SOME_NUMERIC_SETTING", "1.5", float) == 1.5
+
+
+def test_configured_timeout_is_raised_to_provider_minimum():
+    """하한보다 낮게 설정해도 400을 부르지 않도록 끌어올린다."""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c",
+         "from app.core.config import AI_TIMEOUT_SECONDS, AI_MIN_DEADLINE_SECONDS; "
+         "assert AI_TIMEOUT_SECONDS == AI_MIN_DEADLINE_SECONDS, AI_TIMEOUT_SECONDS"],
+        env={**os.environ, "AI_TIMEOUT_SECONDS": "3"},
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr

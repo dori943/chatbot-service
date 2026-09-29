@@ -21,6 +21,7 @@ from app.core.config     import (
     AI_THINKING_LEVEL,
     MAX_CONTEXT_CHARS,
     MIN_FALLBACK_BUDGET_SECONDS,
+    RETRY_BACKOFF_SECONDS,
 )
 
 from app.core.errors     import (
@@ -51,7 +52,9 @@ def build_contents(
         t for t in (history or [])
         if t.get("question") and t.get("answer")
     ]
-    turns = turns[-AI_CONTEXT_TURNS:]
+    # AI_CONTEXT_TURNS=0 은 문맥을 쓰지 않겠다는 뜻이다.
+    # turns[-0:] 는 전체를 남기므로 0을 따로 처리한다.
+    turns = turns[-AI_CONTEXT_TURNS:] if AI_CONTEXT_TURNS > 0 else []
 
     truncated = False
     while turns:
@@ -175,7 +178,10 @@ def _build_config(payload: PromptPayload, timeout: float) -> Any:
 
     try:
         return types.GenerateContentConfig(**base, **extra)
-    except TypeError:
+    except Exception:  # noqa: BLE001 - 구버전 SDK
+        # SDK가 pydantic 모델이라 미지원 옵션은 TypeError가 아니라
+        # ValidationError(ValueError)로 올라온다. 예외 종류를 좁히면
+        # 이 방어 코드가 동작하지 않아 모든 요청이 같은 오류로 실패한다.
         log_event("ai_config_fallback")
         return types.GenerateContentConfig(**base)
 
@@ -250,13 +256,16 @@ async def generate_answer(
 
     for model_index, model in enumerate(candidates):
         is_fallback = model_index > 0
-        last_model  = model
 
         # 주 모델은 시도하되, 폴백을 수행할 시간이 부족하면 이전 실패를 유지한다.
-        budget = min(AI_TIMEOUT_SECONDS, remaining())
-        if is_fallback and budget <= MIN_FALLBACK_BUDGET_SECONDS:
+        # 제공사 하한보다 짧은 deadline은 400으로 거부되므로 예산을 깎지 않는다.
+        if is_fallback and remaining() < MIN_FALLBACK_BUDGET_SECONDS:
             log_event("ai_fallback_skip", model=model, request_id=request_id)
             break
+
+        # 건너뛴 모델이 실패한 모델로 기록되지 않도록 호출이 확정된 뒤에 갱신한다.
+        last_model = model
+        budget     = AI_TIMEOUT_SECONDS
 
         if is_fallback:
             fallback_attempted = True
@@ -313,15 +322,18 @@ async def generate_answer(
                     exc        = exc,
                 )
 
-            # 같은 모델로 재시도할지 판단
+            # 같은 모델로 재시도할지 판단.
+            # 대기 시간까지 포함해 호출 한 번을 온전히 끝낼 여유가 없으면 시작하지 않는다.
+            # 그러지 않으면 chat_main의 전체 타임아웃에 잘려 실제 오류 대신 504로 보고된다.
+            backoff   = RETRY_BACKOFF_SECONDS * (attempt + 1)
             can_retry = (
                 last_code in RETRY_SAME_MODEL
                 and attempt < AI_MAX_RETRIES
-                and remaining() > 1.0
+                and remaining() >= budget + backoff
             )
             if not can_retry:
                 break
-            await asyncio.sleep(min(0.5 * (attempt + 1), max(0.0, remaining() - 0.5)))
+            await asyncio.sleep(backoff)
 
         # 폴백으로 넘어갈 만한 실패가 아니면 여기서 종료
         if last_code not in FALLBACK_TRIGGERS:

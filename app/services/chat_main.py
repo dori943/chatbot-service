@@ -30,8 +30,7 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
             ),
             timeout = config.AI_TOTAL_TIMEOUT_SECONDS,
         )
-        if not isinstance(result, AIResult):
-            raise TypeError("Invalid AI result")
+        if not isinstance(result, AIResult): raise TypeError("Invalid AI result")
     except Exception as exc:
         log_event("chat_ai_failed", exc=exc, request_id=request_id)
         code   = ErrorCode.TIMEOUT if isinstance(exc, TimeoutError) else ErrorCode.UNKNOWN
@@ -75,30 +74,24 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
 
 def validate_room_id(data: ChatRequest) -> str:
     room_id = data.room_id.strip()
-    if not room_id:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID를 입력해 주세요.")
-    if len(room_id) > 64:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID는 64자 이내로 입력해 주세요.")
+    if not room_id:       raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID를 입력해 주세요.")
+    if len(room_id) > 64: raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID는 64자 이내로 입력해 주세요.")
     return room_id
 
 
 def validate_room_name(data: ChatRequest) -> str:
     room_name = data.room_name.strip()
-    if not room_name:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름을 입력해 주세요.")
-    if len(room_name) > 100:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름은 100자 이내로 입력해 주세요.")
+    if not room_name:        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름을 입력해 주세요.")
+    if len(room_name) > 100: raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름은 100자 이내로 입력해 주세요.")
     return room_name
 
 
 def validate_question(data: ChatRequest) -> str:
     question = data.question.strip()
-    if not question:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "질문을 입력해 주세요.")
+    if not question:          raise APIError(422, ErrorCode.INVALID_INPUT, "질문을 입력해 주세요.")
 
     limit = min(config.MAX_QUESTION_LENGTH, 5000)
-    if len(question) > limit:
-        raise APIError(422, ErrorCode.INVALID_INPUT, f"질문은 {limit:,}자 이내로 입력해 주세요.")
+    if len(question) > limit: raise APIError(422, ErrorCode.INVALID_INPUT, f"질문은 {limit:,}자 이내로 입력해 주세요.")
     return question
 
 

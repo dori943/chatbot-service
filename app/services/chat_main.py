@@ -12,63 +12,107 @@ from app.schemas.chat       import ChatRequest, AIResult
 from app.services           import chat_db, AI_connect
 
 
+# 채팅 요청 처리의 핵심 비즈니스 로직(파이프라인)을 수행하는 함수
 async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
+    # 1. 요청 데이터(room_id, room_name, question) 2차 비즈니스 유효성 검증
     room_id    = validate_room_id(data)
     room_name  = validate_room_name(data)
     question   = validate_question(data)
+    # 2. 요청 추적(Tracing)을 위한 고유 식별자(UUID) 할당
     request_id = request_id_context.get() or uuid4().hex
+    # 3. 대화 문맥(Context) 유지를 위해 DB에서 해당 사용자의 방별 이전 대화 이력 조회
     history    = await chat_db.get_history(user_id, room_id, db)
+    # 4. AI 응답 지연 시간(Latency) 측정을 위한 타이머 시작
     started    = time.perf_counter()
 
     try:
+        # 비동기 함수 실행에 최대 대기 시간(타임아웃)을 적용하여 응답 대기
         result = await asyncio.wait_for(
+            # 실제 외부 LLM API와 통신하여 질문에 대한 답변을 생성하는 코루틴 호출
             AI_connect.generate_answer(
+                # 사용자가 현재 입력한 질문 텍스트
                 question   = question,
+                # 대화 문맥(Context) 유지를 위한 이전 대화 목록
                 history    = history,
+                # 속도 제한(Rate Limit) 및 사용자 식별용 ID
                 user_id    = user_id,
+                # 요청 상관관계(Correlation ID) 추적용 식별자
                 request_id = request_id,
             ),
+            # 설정 파일에 정의된 초 단위 제한 시간 (초과 시 asyncio.TimeoutError 발생)
             timeout = config.AI_TOTAL_TIMEOUT_SECONDS,
         )
+        # AI 모듈이 반환한 데이터가 규격 클래스(AIResult) 형태인지 런타임 타입 검사
         if not isinstance(result, AIResult):
+            # 규격에 맞지 않으면 의도적으로 예외를 발생시켜 except 블록으로 전달
             raise TypeError("Invalid AI result")
     except Exception as exc:
+        # AI 호출 실패 또는 타임아웃 발생 시 장애 분석용 이벤트 로그 기록
         log_event("chat_ai_failed", exc=exc, request_id=request_id)
+        # 발생한 예외가 타임아웃인지 일반 에러인지 구분하여 에러 코드 부여
         code   = ErrorCode.TIMEOUT if isinstance(exc, TimeoutError) else ErrorCode.UNKNOWN
+        # 시스템 장애 시에도 비정상 종료를 막기 위해 에러 정보를 담은 대체(Fallback) 객체 수동 생성
         result = AIResult(
+            # 에러 상태 분류 (timeout 또는 error)
             status       = "timeout" if code == ErrorCode.TIMEOUT else "error",
+            # 요청 상관관계 추적용 식별자 유지
             request_id   = request_id,
+            # 사용된 AI 모델명
             model        = config.AI_MODEL,
+            # 실패까지 소요된 시간 (밀리초 단위)
             latency_ms   = int((time.perf_counter() - started) * 1000),
+            # 시스템 내부 에러 분류 코드
             error_code   = code,
+            # 사용자 화면에 노출할 친절한 안내 메시지
             user_message = USER_MESSAGES[code],
         )
 
+    # 응답 객체에 요청 식별자(UUID)를 명시적으로 재할당하여 추적성 보장
     result.request_id = request_id
+    # 반환 객체의 필수 속성 존재 여부 및 데이터 무결성 검증
     validate_result(result)
 
+    # 성공/실패 여부와 관계없이 사용자의 질문과 처리 결과를 데이터베이스 테이블에 영속화(저장)
     created_at = await chat_db.save_result(
+        # 의존성 주입으로 전달받은 비동기 DB 세션
         db        = db,
+        # 요청을 보낸 사용자 ID
         user_id   = user_id,
+        # 대화방 ID
         room_id   = room_id,
+        # 대화방 이름
         room_name = room_name,
+        # 사용자 질문 원문
         question  = question,
+        # AI 결과(성공 답변 또는 Fallback 에러 객체)
         result    = result,
     )
 
+    # 최종 처리 상태가 성공(success)이 아니라면 클라이언트에 규격화된 HTTP 에러 반환
     if result.status != "success":
+        # FastAPI 전역 예외 처리기로 위임할 APIError 예외 발생 (적절한 HTTP Status Code 매핑)
         raise APIError(
+            # 에러 코드에 대응하는 HTTP 상태 코드 (기본 502 Bad Gateway)
             AI_ERROR_STATUS.get(result.error_code, 502),
+            # 내부 정의 에러 코드
             result.error_code,
+            # 사용자에게 전달할 에러 안내 문구
             result.user_message,
+            # 추적용 요청 식별자
             result.request_id,
         )
 
+    # 모든 공정이 정상 완료되었을 때 프론트엔드로 전달할 최종 JSON 응답 딕셔너리
     return {
+        # 대화방 ID
         "room_id"    : room_id,
+        # 대화방 이름
         "room_name"  : room_name,
+        # AI가 생성한 최종 답변 텍스트
         "answer"     : result.answer,
+        # 요청 추적용 고유 ID
         "request_id" : result.request_id,
+        # 프론트엔드 파싱을 위한 UTC ISO-8601 시각 문자열
         "created_at" : created_at.isoformat().replace("+00:00", "Z"),
     }
 

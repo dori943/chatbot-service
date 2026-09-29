@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS login (
 CREATE TABLE IF NOT EXISTS chat_logs (
     id          BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id     VARCHAR(50) NOT NULL,
+    room_id     VARCHAR(64) NOT NULL,
+    room_name   VARCHAR(100) NOT NULL,
     question    VARCHAR(5000) NOT NULL,
     answer      VARCHAR(5000) NULL,
     status      VARCHAR(20) NOT NULL,

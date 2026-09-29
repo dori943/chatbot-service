@@ -1,7 +1,7 @@
 // 화면 상태와 분리된 채팅 요청 처리. 토큰은 호출 시점의 로그인 계정에서 전달한다.
 const REQUEST_TIMEOUT_MS = 30_000;
 
-export async function requestReply(question, token, signal) {
+export async function requestReply(question, roomId, roomName, token, signal) {
   if (!token) throw new Error('로그인 후 질문을 보내 주세요.');
   if (signal?.aborted) throw new DOMException('사용자가 중지했습니다.', 'AbortError');
   const controller = new AbortController();
@@ -18,7 +18,7 @@ export async function requestReply(question, token, signal) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       credentials: 'same-origin',
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, room_id: roomId, room_name: roomName }),
       signal: controller.signal,
     });
     const data = await response.json().catch(() => null);
@@ -32,7 +32,9 @@ export async function requestReply(question, token, signal) {
         422: '질문 내용을 확인해 주세요. 질문은 5,000자 이내로 입력해 주세요.',
         429: '요청이 많습니다. 잠시 후 다시 시도해 주세요.',
       };
-      throw new Error(message || fallback[response.status] || '서버 오류로 응답을 받지 못했습니다.');
+      const error = new Error(message || fallback[response.status] || '서버 오류로 응답을 받지 못했습니다.');
+      error.status = response.status;
+      throw error;
     }
     if (typeof data?.answer !== 'string' || !data.answer.trim()) {
       throw new Error('답변을 불러오지 못했습니다. 다시 시도해 주세요.');

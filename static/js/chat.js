@@ -1,4 +1,4 @@
-import { getAccessToken, getAuthenticatedId } from './auth.js';
+import { getAccessToken, getAuthenticatedId, clearAuth } from './auth.js';
 import { requestReply } from './chat-api.js';
 
 const MAX_QUESTION_LENGTH = 5000;
@@ -215,6 +215,7 @@ async function handleSubmit(event) {
   event.preventDefault();
   if (pending) return;
   if (!getAuthenticatedId()) {
+    clearAuth();
     setStatus('로그인 후 질문을 보내 주세요.', 'error');
     return;
   }
@@ -233,7 +234,7 @@ async function handleSubmit(event) {
   if (!current) {
     current = {
       id: uid(),
-      title: question.slice(0, MAX_CHATS),
+      title: Array.from(question).slice(0, 30).join(''),
       messages: []
     };
     chats.unshift(current);
@@ -241,6 +242,7 @@ async function handleSubmit(event) {
     activeId = current.id;
   }
   const controller = new AbortController();
+  const token = getAccessToken();
   const requestStorageKey = storageKey;
   pending = controller;
   current.messages.push({
@@ -252,7 +254,7 @@ async function handleSubmit(event) {
   setBusy(true);
   setStatus('답변을 기다리고 있어요…');
   try {
-    const reply = await requestReply(question, getAccessToken(), controller.signal);
+    const reply = await requestReply(question, current.id, current.title, token, controller.signal);
     if (pending !== controller || storageKey !== requestStorageKey) return;
     current.messages.push({
       role: 'assistant',
@@ -268,6 +270,7 @@ async function handleSubmit(event) {
       chats = previousChats;
       activeId = null;
     }
+    if (error.status === 401) clearAuth(token);
     const cancelled = error.name === 'AbortError';
     setStatus(
       cancelled ? '응답 대기를 중지했어요. 입력한 질문은 남겨두었습니다.'

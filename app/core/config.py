@@ -4,8 +4,8 @@ AI_API_KEY               = getenv("AI_API_KEY", "").strip()
 AI_MODEL                 = getenv("AI_MODEL", "").strip() or "gemini-3.8-flash"
 AI_FALLBACK_MODEL        = getenv("AI_FALLBACK_MODEL", "").strip() or "gemini-3.1-flash-lite"
 
-AI_TIMEOUT_SECONDS       = float(getenv("AI_TIMEOUT_SECONDS", "10"))
-AI_TOTAL_TIMEOUT_SECONDS = float(getenv("AI_TOTAL_TIMEOUT_SECONDS", "24"))
+AI_TIMEOUT_SECONDS       = float(getenv("AI_TIMEOUT_SECONDS", "8"))
+AI_TOTAL_TIMEOUT_SECONDS = float(getenv("AI_TOTAL_TIMEOUT_SECONDS", "26"))
 AI_MAX_RETRIES           = int(getenv("AI_MAX_RETRIES", "1"))
 
 AI_CONTEXT_TURNS         = int(getenv("AI_CONTEXT_TURNS", "5"))

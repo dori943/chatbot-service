@@ -12,7 +12,9 @@ function getElement(id) {
 const brand = '담다';
 const guestStorageKey = 'damda-chat-v1';
 const storageKeyFor = id => id ? `${guestStorageKey}:user:${encodeURIComponent(id)}` : guestStorageKey;
-let storageKey = storageKeyFor(getAuthenticatedId());
+let ownerId = getAuthenticatedId();
+let storageKey = storageKeyFor(ownerId);
+let draft = null;
 let chats = [];
 let activeId = null;
 let pending = null;
@@ -23,7 +25,16 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 function loadChats() {
   try {
     const loaded = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    return Array.isArray(loaded) ? loaded.filter(isValidChat).slice(0, MAX_CHATS) : [];
+    return Array.isArray(loaded) ? loaded.filter(isValidChat).slice(0, MAX_CHATS).map(chat => {
+      // 이전 slice(0, 30)으로 잘린 이모지 제목은 UTF-8 저장이 가능하도록 복원한다.
+      const wellFormed = text => Array.from(text, character =>
+        character.length === 1 && character >= '\uD800' && character <= '\uDFFF' ? '\uFFFD' : character).join('');
+      if (!chat.title.trim() || Array.from(chat.title).length > 100 || wellFormed(chat.title) !== chat.title) {
+        const firstQuestion = chat.messages.find(message => message.role === 'user')?.text || '새로운 대화';
+        chat.title = Array.from(wellFormed(firstQuestion)).slice(0, 30).join('');
+      }
+      return chat;
+    }) : [];
   } catch (_) {
     return [];
   }
@@ -38,8 +49,10 @@ function isValidChat(chat) {
 function save() {
   try {
     localStorage.setItem(storageKey, JSON.stringify(chats.slice(0, MAX_CHATS)));
+    return true;
   } catch (_) {
-    toast('브라우저 저장 공간을 사용할 수 없어 이번 화면에서만 유지됩니다.');
+    toast('저장하지 못했습니다. 새로고침하면 이전 기록이 다시 나타나거나 이번 변경이 사라질 수 있습니다.');
+    return false;
   }
 }
 
@@ -124,10 +137,10 @@ function renderChat() {
       if (pending) return;
       chats = chats.filter(c => c.id !== activeId);
       activeId = null;
-      save();
+      const saved = save();
       renderHistory();
       renderChat();
-      toast('이 브라우저에서 대화를 삭제했습니다.');
+      if (saved) toast('이 브라우저에서 대화를 삭제했습니다.');
     });
     tools.append(remove);
     getElement('transcript').append(tools);
@@ -161,6 +174,7 @@ function renderChat() {
 }
 
 function updateInput() {
+  if (!ownerId && draft) draft.question = getElement('question').value;
   const count = Array.from(getElement('question').value).length;
   getElement('char-count').textContent = count.toLocaleString() + ' / ' + MAX_QUESTION_LENGTH.toLocaleString();
   getElement('question').style.height = 'auto';
@@ -169,6 +183,7 @@ function updateInput() {
 
 function newChat() {
   if (pending) return;
+  if (!ownerId) draft = null;
   activeId = null;
   getElement('question').value = '';
   setStatus();
@@ -193,17 +208,27 @@ function setBusy(value) {
   document.querySelectorAll('[data-new], [data-prompt], .history-item, .delete-chat').forEach(b => b.disabled = value);
 }
 
-function switchChatOwner(id) {
+function switchChatOwner(id, reason) {
   const nextStorageKey = storageKeyFor(id);
   if (nextStorageKey === storageKey) return;
+  const preserveDraft = ownerId && !id && ['expired', 'unauthorized'].includes(reason);
+  if (preserveDraft) {
+    draft = { id: ownerId, question: getElement('question').value, activeId };
+  } else if (id !== draft?.id) {
+    draft = null;
+  }
   pending?.abort();
   pending = null;
   storageKey = nextStorageKey;
+  ownerId = id;
   chats = loadChats();
-  activeId = null;
-  getElement('question').value = '';
+  const restoreDraft = id && draft?.id === id;
+  activeId = restoreDraft && chats.some(chat => chat.id === draft.activeId) ? draft.activeId : null;
+  getElement('question').value = preserveDraft || restoreDraft ? draft.question : '';
+  if (restoreDraft) draft = null;
   getElement('history-search').value = '';
   setStatus();
+  if (preserveDraft) setStatus('로그인이 만료됐습니다. 같은 계정으로 다시 로그인하면 질문을 이어서 보낼 수 있습니다.', 'error');
   setBusy(false);
   updateInput();
   renderHistory();
@@ -319,7 +344,7 @@ function bindChatEvents() {
 }
 
 chats = loadChats();
-window.addEventListener('authchange', event => switchChatOwner(event.detail.id));
+window.addEventListener('authchange', event => switchChatOwner(event.detail.id, event.detail.reason));
 bindChatEvents();
 updateInput();
 renderHistory();

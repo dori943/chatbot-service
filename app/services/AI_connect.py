@@ -72,29 +72,35 @@ def build_contents(
     history: Iterable[dict[str, Any]] | None = None,
 ) -> PromptPayload:
     """성공한 대화를 오래된 순서로 받아 최근 턴과 길이 제한을 적용한다."""
-    # 리스트 컴프리헨션: 과거 대화 중 question과 answer가 모두 존재하는 정상 데이터만 필터링 (불량 데이터 제거)
-    # (동작: for t in history 돌며 if t.get('question') and t.get('answer') 조건을 만족하는 것만 새 리스트에 수집)
+    # [1단계 실제 작용 지점: 정상 대화 턴 필터링]
+    # 리스트 컴프리헨션(List Comprehension) 문법: for문과 if문을 한 줄로 압축한 파이썬 특유의 목록 생성 기법
+    # (동일한 일반 코드: turns = [] ➔ for t in history: ➔ if t.get('question') and t.get('answer'): turns.append(t))
+    # -> 과거 대화(history) 중 질문과 답변이 둘 다 온전히 채워진 정상 데이터만 골라내어 turns 리스트에 새로 담음
     turns: list[dict[str, Any]] = [
         t for t in (history or [])
         if t.get("question") and t.get("answer")
     ]
+    # [2단계 실제 작용 지점: 최근 대화 슬라이싱]
     # 음수 인덱스 슬라이싱([-N:]): 리스트 맨 뒤에서부터 N개를 잘라내어 가장 최근 대화만 유지 (토큰 낭비 방지)
+    # (예: 대화가 10개 있어도 AI_CONTEXT_TURNS가 5라면 가장 최근 5개만 남김)
     turns = turns[-AI_CONTEXT_TURNS:]
 
     # 글자 수 제한 초과로 인한 과거 대화 절삭 여부 플래그
     truncated = False
-    # 전체 대화 텍스트 길이가 허용 한도(MAX_CONTEXT_CHARS) 이하가 될 때까지 오래된 대화부터 큐(Queue, FIFO) 방식으로 제거
+    # [3단계 실제 작용 지점: 큐(Queue, FIFO) 방식의 글자 수 절삭]
+    # 전체 대화 텍스트 길이가 허용 한도(MAX_CONTEXT_CHARS) 이하가 될 때까지 오래된 대화부터 큐 방식으로 제거
     while turns:
         # 현재 남은 대화 턴들의 질문/답변 글자 수 총합 계산
         total = sum(len(t["question"]) + len(t["answer"]) for t in turns)
         # 과거 대화 총 글자 수 + 현재 질문 글자 수가 최대 허용한도 이내이면 루프 탈출
         if total + len(question) <= MAX_CONTEXT_CHARS:
             break
-        # 한도 초과 시 가장 오래된 대화(0번 인덱스)를 먼저 꺼내 버림 (First-In First-Out)
+        # 한도 초과 시 가장 오래된 대화(0번 인덱스)를 먼저 꺼내 버림 (First-In First-Out, 큐 동작)
         turns.pop(0)
         # 문맥 절삭 플래그 활성화
         truncated = True
 
+    # [4단계 실제 작용 지점: Gemini 규격 핑퐁 대화 포맷팅]
     # Google Gemini API가 요구하는 대화형 규격(User ➔ Model ➔ User 핑퐁 대화) 리스트 초기화 (빈 바구니 생성)
     contents: list[dict[str, Any]] = []
     # 정제된 과거 대화 턴들을 user(사용자 질문)와 model(AI 답변)의 역할(Role) 기반 메시지로 번갈아 추가
@@ -106,9 +112,10 @@ def build_contents(
     # 3) 대화 흐름의 맨 마지막에 현재 사용자의 신규 질문을 user 역할로 추가하여 문맥 완성
     contents.append({"role": "user", "parts": [{"text": question}]})
 
+    # [5단계 실제 작용 지점: 동적 시스템 프롬프트 변경 및 최종 패키징]
     # 기본 시스템 지침(System Prompt) 할당 (AI의 역할/페르소나 지정)
     system_instruction = SYSTEM_PROMPT
-    # 인과관계: 위 while 루프에서 대화가 잘렸는지(truncated=True) 계산이 끝난 후에만 경고문 부착 가능
+    # 인과관계: 3단계 while 루프에서 대화가 잘렸는지(truncated=True) 계산이 끝난 후에만 경고문 부착 가능
     # 글자 수 한도로 인해 과거 대화가 잘려나간 경우, AI에게 문맥 생략 안내 문구(CONTEXT_TRUNCATED_NOTICE) 추가
     if truncated:
         system_instruction = f"{SYSTEM_PROMPT}\n\n{CONTEXT_TRUNCATED_NOTICE}"

@@ -213,47 +213,90 @@ def _extract_answer(response: Any) -> tuple[str, str | None]:
     return "", ErrorCode.EMPTY_RESPONSE
 
 
-def _build_config(payload: PromptPayload, timeout: float) -> Any:
+# ==============================================================================
+# [설정 빌더: _build_config]
+# Google GenAI SDK 규격의 GenerateContentConfig 설정 객체를 동적으로 조립
+# 1) 기본 설정(base): 시스템 지침, 온도(temperature), 최대 토큰, HTTP 타임아웃(ms)
+# 2) 부가 설정(extra): 함수 호출 비활성화(AFC disable), 추론 레벨(thinking_config)
+# 3) 버전 호환성 방어: SDK 버전에 따라 extra 파라미터를 지원하지 않으면 기본 base로만 자동 폴백
+# ==============================================================================
+# Gemini API 호출 시 전달할 세부 하이퍼파라미터 및 네트워크 설정 객체 생성 함수
+def _build_config(
+    # 조립된 대화 내용 및 시스템 지침이 담긴 페이로드
+    payload: PromptPayload,
+    # 해당 호출에 할당된 제한 시간(초 단위 float)
+    timeout: float,
+) -> Any:
     """GenerateContentConfig 를 만든다.
 
     SDK 버전에 따라 지원하지 않는 옵션이 있을 수 있으므로,
     부가 옵션은 실패해도 기본 설정으로 넘어가도록 방어한다.
     """
+    # 필수적인 기본 생성 파라미터 딕셔너리 구성
     base = dict(
+        # AI 모델의 역할 및 행동 지침 (과거 대화 생략 안내문 포함)
         system_instruction = payload.system_instruction,
+        # 답변의 무작위성/창의성 조절 (낮을수록 일관되고 결정론적인 답변 생성)
         temperature        = AI_TEMPERATURE,
+        # 모델이 생성할 수 있는 최대 출력 토큰 수 제한 (비용 및 응답 길이 통제)
         max_output_tokens  = AI_MAX_TOKENS,
+        # HTTP 네트워크 옵션: SDK는 밀리초(ms) 단위를 요구하므로 초(s) * 1000 변환 적용
         http_options       = types.HttpOptions(timeout=int(timeout * 1000)),  # ms
     )
+    # SDK 버전에 따라 선택적으로 지원되는 부가 옵션 딕셔너리
     extra: dict[str, Any] = {}
 
-    # 함수 호출(AFC)은 쓰지 않는다 — 경고 제거 + 불필요한 왕복 방지
+    # 자동 함수 호출(AFC, Automatic Function Calling) 기능 비활성화 처리
+    # (일반 텍스트 챗봇이므로 도구 호출을 차단하여 불필요한 네트워크 왕복 지연 및 경고 방지)
     try:
+        # 구글 SDK 최신 규격의 함수 호출 비활성화 옵션 주입
         extra["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
+            # AFC 완전 끄기
             disable = True
         )
+    # 구버전 SDK이거나 해당 설정을 지원하지 않는 경우 조용히 무시(Pass)
     except Exception:  # noqa: BLE001 - 구버전 SDK
         pass
 
-    # 내부 추론 단계 낮추기 (응답 속도·비용 절감)
+    # 모델의 내부 추론(Thinking) 단계 조절 설정 (지원 모델에 한함)
+    # (추론 단계를 낮추어 토큰 소모를 줄이고 사용자 응답 속도를 극대화)
     if AI_THINKING_LEVEL:
         try:
+            # 설정에 지정된 추론 레벨 주입
             extra["thinking_config"] = types.ThinkingConfig(
+                # 추론 강도 레벨 지정
                 thinking_level = AI_THINKING_LEVEL
             )
+        # 미지원 버전 또는 모델인 경우 로그 기록 후 예외 격리
         except Exception:  # noqa: BLE001
             log_event("ai_config_option_ignored")
 
+    # 기본 설정(base)과 부가 설정(extra)을 언패킹(**)하여 최종 설정 객체 생성 시도
     try:
         return types.GenerateContentConfig(**base, **extra)
+    # 설치된 SDK 버전이 낮아 extra 옵션 파라미터를 인식하지 못해 TypeError가 발생한 경우
     except TypeError:
+        # 설정 다운그레이드 이벤트 로깅
         log_event("ai_config_fallback")
+        # 안전한 기본 설정(base)만으로 객체를 생성하여 반환 (하위 호환성 보장)
         return types.GenerateContentConfig(**base)
 
 
+# ==============================================================================
+# [단일 호출기: _call_once]
+# 특정 모델(주 모델 또는 폴백 모델)에 대해 1회 네트워크 요청을 수행하는 핵심 통신 함수
+# 1) API 키 부재 사전 차단: 네트워크 호출 전 즉시 CONFIG 에러 반환
+# 2) 2중 타임아웃 방어막: SDK 내부 HttpOptions + 파이썬 asyncio.wait_for의 이중 보호
+# 3) 비동기 호출: _client().aio(AsyncIO)를 통해 서버 이벤트 루프를 블로킹하지 않음
+# 4) 결과 및 토큰 사용량 파싱: _extract_answer()로 텍스트/에러 분리 및 usage_metadata 반환
+# ==============================================================================
+# 지정된 모델에 프롬프트를 전송하고 1회 생성 결과를 받아오는 비동기 함수
 async def _call_once(
+    # 호출 대상 AI 모델 식별자 (예: gemini-2.0-flash 등)
     model: str,
+    # build_contents에서 조립된 프롬프트 페이로드
     payload: PromptPayload,
+    # 이번 시도에 할당된 가용 시간(초)
     timeout: float,
 ) -> tuple[str | None, str | None, Any]:
     """모델을 한 번 호출한다. 반환: (answer, error_code, usage_metadata).
@@ -261,22 +304,34 @@ async def _call_once(
     asyncio.wait_for 로 타임아웃을 직접 강제한다.
     SDK 내부 타임아웃 동작에 의존하지 않기 위함이다.
     """
+    # API 키 환경변수가 비어있거나 누락된 경우 네트워크 요청 없이 설정 에러 즉시 반환
     if not AI_API_KEY or not AI_API_KEY.strip():
         return None, ErrorCode.CONFIG, None
+    # 이번 호출의 타임아웃을 반영한 GenerateContentConfig 설정 조립
     config = _build_config(payload, timeout)
 
+    # 파이썬 이벤트 루프 레벨에서 엄격한 타임아웃을 강제하는 비동기 대기
+    # (SDK 내부의 HTTP 소켓 타임아웃 오작동이나 무한 행(Hang) 현상 원천 차단)
     response = await asyncio.wait_for(
+        # GenAI 클라이언트의 aio(AsyncIO) 비동기 엔드포인트를 통해 모델 생성 API 호출
         _client().aio.models.generate_content(
+            # 호출할 모델명
             model    = model,
+            # 포맷팅된 대화 메시지 목록
             contents = payload.contents,
+            # 조립된 설정 객체
             config   = config,
         ),
+        # asyncio.wait_for의 제한 시간 (초과 시 TimeoutError 발생)
         timeout = timeout,
     )
 
+    # API 응답 객체에서 실제 텍스트 및 안전 검열/토큰 초과 등의 사유 분리 추출
     text, err = _extract_answer(response)
+    # 검열(BLOCKED), 토큰한도(TOKEN_LIMIT) 등 내부 에러 코드가 감지된 경우 에러 코드 반환
     if err:
         return None, err, getattr(response, "usage_metadata", None)
+    # 정상 생성 완료 시 추출된 텍스트와 토큰 사용량(usage_metadata) 반환
     return text, None, getattr(response, "usage_metadata", None)
 
 

@@ -1,6 +1,6 @@
-# 챗봇 서비스 코드 분석 및 학습 요약 (v1.1)
+# 챗봇 서비스 코드 분석 및 학습 요약 (v1.2)
 
-본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인 및 AI 연동)을 분석한 내용을 체계적으로 정리한 문서입니다.
+본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인, AI 연동, DB 영속화)을 분석한 내용을 체계적으로 정리한 문서입니다.
 
 ---
 
@@ -33,7 +33,7 @@
 
 ### 5단계: 백엔드 핵심 비즈니스 파이프라인 (`app/services/chat_main.py`)
 `chat()` 함수는 8단계의 엄격한 순차적 파이프라인으로 동작합니다:
-1. **2차 비즈니스 검증**: `validate_room_id`, `validate_room_name`, `validate_question`을 통한 공백 및 길이 검증.
+1. **2차 비즈니스 검증**: `validate_room_id`, `validate_room_name`, `validate_question`을 통한 공백(`.strip()`) 및 최대 길이 초과 검증.
 2. **요청 추적 식별자 할당**: 분산 환경 및 로그 분석을 위한 고유 UUID(`request_id`) 부여.
 3. **대화 문맥(Context) 로드**: AI가 이전 대화를 기억할 수 있도록 DB에서 과거 이력 조회 (`chat_db.get_history`).
 4. **레이턴시 측정**: AI 응답 소요 시간 측정을 위한 타이머 시작 (`time.perf_counter()`).
@@ -47,6 +47,18 @@
 - **`status="success"`의 기원**: 외부 LLM(Gemini 등) 모델과의 통신이 성공하여 정상 텍스트 답변이 생성되었을 때, `AI_connect.py` 285번째 줄에서 `AIResult(status="success", ...)` 객체가 최초 생성되어 반환됨.
 - **재시도 및 모델 폴백**: 주 모델 호출 실패 시 재시도(`AI_MAX_RETRIES`) 및 백업 폴백 모델(`AI_FALLBACK_MODEL`)로 자동 전환하는 안전장치 구비.
 
+### 7단계: 데이터베이스 영속화 계층 (`app/services/chat_db.py`)
+SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 영속성(Persistence)과 트랜잭션을 전담합니다:
+1. **`save_result` (대화 저장 - INSERT)**:
+   - `ChatLog` ORM 엔티티를 생성하여 질문, 답변, 상태, 레이턴시, 모델명 등을 매핑.
+   - `db.add()` 후 `await db.commit()`으로 즉시 영구 반영하며, 실패 시 `await db.rollback()` 후 503 에러 전파.
+2. **`get_history` (문맥용 과거 대화 조회 - SELECT)**:
+   - AI 문맥 오염을 방지하기 위해 `status == 'success'`인 정상 대화 건만 엄격히 필터링.
+   - 최근 N개(`limit`)를 역순 조회(`order_by(ChatLog.id.desc())`) 후 시간순(`reversed`)으로 재배열하여 주입.
+   - DB 에러 발생 시에도 전체 대화가 멈추지 않도록 빈 리스트(`[]`)를 반환하는 장애 격리(Fault Tolerance) 구현.
+3. **`get_list_chat` (내 전체 대화 목록 조회 - SELECT)**:
+   - 현재 사용자의 전체 대화 기록을 최신순으로 조회하여 반환.
+
 ---
 
 ## 2. 아키텍처 핵심 인사이트
@@ -59,8 +71,12 @@
    - **Persistence (`app/services/chat_db.py`)**: 데이터베이스 쿼리 및 데이터 영속화.
 3. **장애 격리 및 고가용성 (Fault Tolerance)**:
    - 외부 AI 서비스 지연에 대비한 `asyncio.wait_for` 기반 타임아웃 제어.
+   - 문맥 조회 실패 시 빈 리스트 Fallback을 적용하여 단일 질문이라도 처리되도록 방어.
    - 에러 발생 시에도 비정상 종료(Crash)를 막고 Fallback 객체를 구성하여 DB에 실패 이력을 기록하는 감사(Audit) 추적성 확보.
+4. **심층 방어 (Defense in Depth)**:
+   - 입력값 검증: 라우터 1차(Pydantic 타입) ➔ 서비스 2차(비즈니스 공백/길이 제한).
+   - 출력값 검증: 1차(isinstance 반환 타입) ➔ 2차(품질 검사 및 에러 강등).
 
 ---
 *작업 브랜치: `docs/lgt-back/code-analysis`*  
-*문서 버전: v1.1*
+*문서 버전: v1.2*

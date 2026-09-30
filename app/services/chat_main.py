@@ -167,40 +167,63 @@ def validate_question(data: ChatRequest) -> str:
     return question
 
 
+# AI 결과 검증 및 보정: AI 응답의 무결성 검사 및 비정상 응답 시 상태값 재조정
 def validate_result(result: AIResult):
+    # 1. AI 호출이 'success'로 반환된 경우의 무결성 검증
     if result.status == "success":
+        # 답변이 문자열이 아니거나 공백만 있는 경우 빈 응답 에러로 강등
         if not isinstance(result.answer, str) or not result.answer.strip():
             result.error_code = ErrorCode.EMPTY_RESPONSE
+        # 답변 길이가 시스템 허용 한도(5,000자)를 초과하는 경우 에러 처리
         elif len(result.answer) > 5000:
             result.error_code = ErrorCode.ANSWER_TOO_LONG
+        # 정상 답변인 경우 에러 필드를 비우고 검증 통과 처리
         else:
             result.error_code   = None
             result.user_message = None
             return
+    # 상태값이 정의되지 않은 엉뚱한 값일 경우 알 수 없는 에러로 분류
     elif result.status not in ("error", "timeout"):
         result.error_code = ErrorCode.UNKNOWN
 
+    # 에러 코드가 비어 있는 예외 상황에 대한 방어 로직
     if not result.error_code:
+        # 타임아웃 상태면 타임아웃 코드로 보정
         if result.status == "timeout":
             result.error_code = ErrorCode.TIMEOUT
+        # 그 외에는 알 수 없는 에러 코드로 보정
         else:
             result.error_code = ErrorCode.UNKNOWN
+    # 에러 코드에 따라 최종 상태값을 "timeout" 또는 "error"로 확정
     result.status       = "timeout" if result.error_code == ErrorCode.TIMEOUT else "error"
+    # 결함이 있거나 실패한 답변 내용은 클라이언트에 노출되지 않도록 초기화
     result.answer       = None
+    # 사용자에게 안내할 최종 에러 메시지 매핑
     result.user_message = USER_MESSAGES.get(result.error_code, USER_MESSAGES[ErrorCode.UNKNOWN])
 
 
+# 현재 로그인한 사용자의 전체 채팅 내역 목록 조회
 async def get_my_chat(user_id: str, db: AsyncSession):
+    # DB 계층(chat_db)을 호출하여 해당 사용자의 채팅 레코드 목록(Row) 조회
     rows = await chat_db.get_list_chat(user_id, db)
+    # DB 조회 결과 객체들을 프론트엔드 응답 규격(JSON 딕셔너리 리스트)으로 가공하여 반환
     return [
         {
+            # 채팅 기록 고유 번호(Primary Key)
             "id"         : row.id,
+            # 대화방 ID
             "room_id"    : row.room_id,
+            # 대화방 이름
             "room_name"  : row.room_name,
+            # 사용자 질문 원문
             "question"   : row.question,
+            # AI 답변 내용
             "answer"     : row.answer,
+            # 처리 상태 ("success", "timeout", "error")
             "status"     : row.status,
+            # 프론트엔드 파싱을 위한 UTC ISO-8601 시각 문자열 변환
             "created_at" : row.created_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
         }
+        # 조회된 각 행(row)에 대해 반복 처리 (List Comprehension)
         for row in rows
     ]

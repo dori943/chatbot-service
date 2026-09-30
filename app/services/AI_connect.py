@@ -300,7 +300,7 @@ async def _call_once(
     timeout: float,
 ) -> tuple[str | None, str | None, Any]:
     # -------------------------------------------------------------------------
-    # ■ 독스트링(Docstring, Documentation String)이란?
+    # 독스트링(Docstring, Documentation String)이란? 고급 주석이다.
     #   - 파이썬에서 함수/클래스 바로 아래에 붙이는 '공식 제품 설명서' 문법 (큰따옴표 3개: """ ... """)
     #   - 일반 주석(#)과의 3가지 결정적 차이점 (고급 주석인 이유):
     #     1) 에디터 연동: VS Code 등에서 함수 이름에 마우스를 올렸을 때(Hover) 팝업 툴팁으로 표시됨
@@ -343,25 +343,49 @@ async def _call_once(
     return text, None, getattr(response, "usage_metadata", None)
 
 
+# ==============================================================================
+# [최상위 오케스트레이터: generate_answer]
+# 서비스 계층(chat_main.py)이 호출하는 AI 서비스의 메인 엔트리포인트 함수
+# 1) 후보군 등록: 주 모델(AI_MODEL) 및 보조 폴백 모델(AI_FALLBACK_MODEL)을 후보 리스트로 관리
+# 2) 시간 예산(Budget): 전체 제한시간(AI_TOTAL_TIMEOUT_SECONDS) 내에서 남은 가용 시간을 실시간 계산
+# 3) 2중 중첩 루프: [외부] 모델 교체 루프(candidates) ➔ [내부] 동일 모델 재시도 루프(AI_MAX_RETRIES)
+# 4) 지수 백오프(Backoff): 재시도 간격(0.5s * attempt)을 점진적으로 늘려 외부 서버 부하 경감
+# 5) 지능형 탈출: 재시도 가능 에러(RETRY_SAME_MODEL) 및 폴백 가능 에러(FALLBACK_TRIGGERS)를 엄격히 감별
+# 6) 무장애 방어: 어떤 실패가 발생해도 서버를 죽이지 않고 AIResult(status='timeout'|'error') 반환
+# ==============================================================================
+# 외부 LLM 모델에 질문을 전송하고 답변 또는 장애 대체 객체(AIResult)를 반환하는 비동기 메인 함수
 async def generate_answer(
+    # 사용자 질문 원문
     question: str,
+    # 자연스러운 대화 맥락 유지를 위해 시간순으로 정렬된 이전 대화 목록
     history: Iterable[dict[str, Any]] | None = None,
+    # 파이썬 키워드 전용 인자(Keyword-only argument) 강제 구분자 (* 이후는 이름=값 형태로만 전달 가능)
     *,
+    # 요청을 보낸 사용자 고유 식별자
     user_id: str | None = None,
+    # 분산 환경 및 로그 추적용 요청 식별자
     request_id: str | None = None,
 ) -> AIResult:
+    # -------------------------------------------------------------------------
+    # ■ 독스트링(Docstring): 개발자 및 IDE를 위한 공식 함수 사용 설명서
+    # -------------------------------------------------------------------------
     """오류 분류에 따라 재시도·폴백을 적용해 AI 응답을 생성한다.
 
     AI 호출 실패는 AIResult로 반환하고, 작업 취소는 호출자에게 전달한다.
     입력 검증·DB 저장·HTTP 오류 변환은 chat_main에서 처리한다.
     """
+    # 전달받은 request_id가 없으면 12자리 난수 고유 식별자를 신규 발급
     request_id = request_id or uuid.uuid4().hex[:12]
+    # 5단계 파이프라인을 거쳐 Gemini API 규격의 프롬프트 페이로드 조립
     payload    = build_contents(question, history)
 
+    # 1순위로 호출할 기본 주 모델(AI_MODEL)을 후보 리스트에 등록
     candidates = [AI_MODEL]
+    # 보조 모델(AI_FALLBACK_MODEL)이 설정되어 있고 주 모델과 다를 경우 2순위 후보로 등록
     if AI_FALLBACK_MODEL and AI_FALLBACK_MODEL != AI_MODEL:
         candidates.append(AI_FALLBACK_MODEL)
 
+    # AI 호출 시작 이벤트 로깅 (요청 ID, 모델명, 문맥 턴 수, 질문 길이 등)
     log_event(
         "ai_call_start",
         request_id    = request_id,
@@ -371,27 +395,38 @@ async def generate_answer(
         q_len         = len(question),
     )
 
+    # 고정밀 성능 측정 타이머 시작 (총 소요 시간 및 레이턴시 측정 기준점)
     started            = time.perf_counter()
+    # 마지막으로 발생한 에러 코드를 추적하기 위한 변수 초기화
     last_code          = ErrorCode.UNKNOWN
+    # 마지막으로 시도한 모델명을 기록하기 위한 변수 초기화
     last_model         = AI_MODEL
+    # 보조(폴백) 모델 시도 여부 플래그
     fallback_attempted = False
 
+    # 현재 시점까지 경과된 총 시간을 밀리초(ms)로 반환하는 내부 클로저 함수
     def elapsed_ms() -> int:
         return int((time.perf_counter() - started) * 1000)
 
+    # 전체 허용 시간(AI_TOTAL_TIMEOUT_SECONDS) 중 아직 사용 가능한 남은 시간(초) 계산
     def remaining() -> float:
         return AI_TOTAL_TIMEOUT_SECONDS - (time.perf_counter() - started)
 
+    # [외부 루프: 모델 교체 파이프라인] 주 모델부터 시작하여 실패 시 폴백 모델 순으로 순회
     for model_index, model in enumerate(candidates):
+        # 인덱스가 0보다 크면 대체(폴백) 모델 실행 상태로 판정
         is_fallback = model_index > 0
+        # 현재 시도 중인 모델명 갱신
         last_model  = model
 
-        # 주 모델은 시도하되, 폴백을 수행할 시간이 부족하면 이전 실패를 유지한다.
+        # 이번 1회 호출에 부여할 제한 시간(Budget): 단일 제한시간과 전체 잔여시간 중 작은 값 선택
         budget = min(AI_TIMEOUT_SECONDS, remaining())
+        # 폴백 모델 차례인데 남은 시간이 최소 가용시간(예: 3초) 이하이면 무리하게 시도하지 않고 즉시 포기
         if is_fallback and budget <= MIN_FALLBACK_BUDGET_SECONDS:
             log_event("ai_fallback_skip", model=model, request_id=request_id)
             break
 
+        # 폴백 모델 시도 플래그 활성화 및 폴백 전환 감사 로그 기록
         if is_fallback:
             fallback_attempted = True
             log_event(
@@ -402,11 +437,15 @@ async def generate_answer(
                 error_code     = last_code,
             )
 
+        # [내부 루프: 동일 모델 재시도 파이프라인] 최대 재시도 횟수(AI_MAX_RETRIES)만큼 호출 반복
         for attempt in range(AI_MAX_RETRIES + 1):
             try:
+                # 단일 모델 1회 호출 수행 (타임아웃은 계산된 budget 적용)
                 answer, err_code, usage = await _call_once(model, payload, budget)
 
+                # 에러 코드가 없으면 모델 통신 성공
                 if err_code is None:
+                    # 호출 성공 메트릭 및 감사 로그 기록
                     log_event(
                         "ai_call_success",
                         request_id = request_id,
@@ -436,7 +475,9 @@ async def generate_answer(
                         fallback_used     = is_fallback,
                     )
 
+                # 텍스트 추출 중 감지된 내부 에러(검열, 토큰 초과 등) 코드 갱신
                 last_code = err_code
+                # 호출 실패 이벤트 로깅
                 log_event(
                     "ai_call_fail",
                     request_id = request_id,
@@ -445,8 +486,11 @@ async def generate_answer(
                     attempt    = attempt + 1,
                 )
 
+            # 네트워크 에러, 타임아웃, API 예외 등 발생 시 예외 처리
             except Exception as exc:
+                # 발생한 파이썬 예외를 서비스 표준 에러 코드(ErrorCode)로 분류 변환
                 last_code = _classify(exc)
+                # 예외 상세 정보와 함께 호출 실패 로그 기록
                 log_event(
                     "ai_call_fail",
                     request_id = request_id,
@@ -456,21 +500,28 @@ async def generate_answer(
                     exc        = exc,
                 )
 
-            # 같은 모델로 재시도할지 판단
+            # 동일 모델로 재시도할 수 있는 조건인지 3중 검증
+            # 1) 일시적 장애(503, 429, 네트워크 등)인지 여부 (401 키오류나 400 등은 재시도 무의미)
+            # 2) 아직 최대 재시도 횟수(AI_MAX_RETRIES)가 남아있는지 여부
+            # 3) 전체 남은 시간이 최소 1초 이상 남아있는지 여부
             can_retry = (
                 last_code in RETRY_SAME_MODEL
                 and attempt < AI_MAX_RETRIES
                 and remaining() > 1.0
             )
+            # 재시도 조건을 만족하지 못하면 내부 루프 즉시 탈출
             if not can_retry:
                 break
+            # 지수 백오프(Exponential Backoff): 재시도 횟수에 비례해 점진적으로 대기시간을 늘려 서버 회복 유도
             await asyncio.sleep(min(0.5 * (attempt + 1), max(0.0, remaining() - 0.5)))
 
-        # 폴백으로 넘어갈 만한 실패가 아니면 여기서 종료
+        # 발생한 에러가 다른 모델로 바꾼다고 해결될 성질이 아닌 경우(예: 유해성 차단 등) 폴백 루프 즉시 중단
         if last_code not in FALLBACK_TRIGGERS:
             break
 
+    # 타임아웃 에러인 경우 'timeout', 그 외의 에러는 'error'로 최종 결과 상태 결정
     status = "timeout" if last_code == ErrorCode.TIMEOUT else "error"
+    # 모든 모델 및 재시도 실패(포기) 이벤트 감사 로그 기록
     log_event(
         "ai_call_giveup",
         request_id = request_id,
@@ -479,12 +530,20 @@ async def generate_answer(
         latency_ms = elapsed_ms(),
         fallback   = fallback_attempted,
     )
+    # 서버 예외 발생 없이 chat_main.py가 핸들링할 수 있는 장애 대체 객체(AIResult) 최종 반환
     return AIResult(
+        # 실패 상태 문자열 ('timeout' 또는 'error')
         status        = status,
+        # 요청 식별자
         request_id    = request_id,
+        # 최종 시도된 모델명
         model         = last_model,
+        # 총 소요 시간 (ms)
         latency_ms    = elapsed_ms(),
+        # 발생한 표준 에러 코드
         error_code    = last_code,
+        # 사용자에게 화면으로 보여줄 친절한 안내 메시지 맵핑
         user_message  = USER_MESSAGES.get(last_code, USER_MESSAGES[ErrorCode.UNKNOWN]),
+        # 폴백 모델 시도 여부
         fallback_used = fallback_attempted,
     )

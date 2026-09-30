@@ -1,6 +1,6 @@
-# 챗봇 서비스 코드 분석 및 학습 요약 (v1.2)
+# 챗봇 서비스 코드 분석 및 학습 요약 (v1.3)
 
-본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인, AI 연동, DB 영속화)을 분석한 내용을 체계적으로 정리한 문서입니다.
+본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인, AI 연동, DB 영속화, 자료구조 최적화)을 분석한 내용을 체계적으로 정리한 문서입니다.
 
 ---
 
@@ -42,19 +42,25 @@
 7. **무조건적인 DB 영속화**: 성공/실패 여부와 상관없이 사용자의 질문과 처리 결과를 DB 테이블에 저장 (`chat_db.save_result`).
 8. **응답 분기 및 반환**: 실패 시 정의된 `APIError` 예외 발생(전역 핸들러에서 502/504 반환), 성공 시 ISO-8601 UTC 시각을 포함한 최종 JSON 딕셔너리 반환.
 
-### 6단계: 외부 AI 통신 및 결과 생성 (`app/services/AI_connect.py`)
+### 6단계: 외부 AI 통신 및 프롬프트 엔지니어링 (`app/services/AI_connect.py`)
 - **함수 연동 메커니즘**: `chat_main.py`의 `AI_connect.generate_answer(...)` 호출은 `AI_connect.py`의 `async def generate_answer(...) -> AIResult`로 연결되며, 리턴값이 `chat_main.py`의 `result` 변수로 전달됨.
 - **`status="success"`의 기원**: 외부 LLM(Gemini 등) 모델과의 통신이 성공하여 정상 텍스트 답변이 생성되었을 때, `AI_connect.py` 285번째 줄에서 `AIResult(status="success", ...)` 객체가 최초 생성되어 반환됨.
+- **프롬프트 빌더 파이프라인 (`build_contents`)**:
+  1. **불량 데이터 필터링**: 리스트 컴프리헨션(`[t for t in history if t.get('question') and t.get('answer')]`)으로 질문과 답변이 온전한 정상 턴만 선별.
+  2. **최근 턴 슬라이싱**: 음수 인덱스 슬라이싱(`turns[-AI_CONTEXT_TURNS:]`)으로 최근 대화만 남겨 토큰 낭비 방지.
+  3. **큐(Queue, FIFO) 기반 글자 수 절삭**: 총 글자 수가 `MAX_CONTEXT_CHARS`를 넘으면 `turns.pop(0)`을 통해 가장 오래된 대화부터 순차 제거(First-In First-Out)하여 최신 문맥 보존.
+  4. **Gemini 규격 맵핑**: 사용자(`user`)와 AI 모델(`model`)의 롤 기반 핑퐁 메시지로 변환 후, 맨 마지막에 현재 질문 추가.
+  5. **동적 시스템 프롬프트 통제**: 대화가 절삭된 경우(`if truncated:`) AI에게 과거 대화 일부가 생략되었음을 알리는 경고문(`CONTEXT_TRUNCATED_NOTICE`)을 동적으로 부착.
 - **재시도 및 모델 폴백**: 주 모델 호출 실패 시 재시도(`AI_MAX_RETRIES`) 및 백업 폴백 모델(`AI_FALLBACK_MODEL`)로 자동 전환하는 안전장치 구비.
 
 ### 7단계: 데이터베이스 영속화 계층 (`app/services/chat_db.py`)
 SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 영속성(Persistence)과 트랜잭션을 전담합니다:
 1. **`save_result` (대화 저장 - INSERT)**:
-   - `ChatLog` ORM 엔티티를 생성하여 질문, 답변, 상태, 레이턴시, 모델명 등을 매핑.
+   - 파라미터로 넘어온 입력 재료(원시 데이터)를 DB 테이블 규격(`ChatLog` 엔티티)에 맞춰 1:1로 분해 및 조립.
    - `db.add()` 후 `await db.commit()`으로 즉시 영구 반영하며, 실패 시 `await db.rollback()` 후 503 에러 전파.
 2. **`get_history` (문맥용 과거 대화 조회 - SELECT)**:
    - AI 문맥 오염을 방지하기 위해 `status == 'success'`인 정상 대화 건만 엄격히 필터링.
-   - 최근 N개(`limit`)를 자르기 위해 반드시 역순(`order_by(ChatLog.id.desc())`)으로 조회한 뒤, 파이썬 인메모리에서 시간순(`reversed`)으로 재배열하여 주입 (처음부터 ASC로 LIMIT을 걸면 가장 오래된 첫 5건이 조회되므로 이를 방지하고, 무거운 DB 서브쿼리 대신 파이썬 메모리에서 초고속으로 뒤집는 최적화 적용).
+   - 최근 N개(`limit`)를 자르기 위해 반드시 역순(`order_by(ChatLog.id.desc())`)으로 조회한 뒤, 파이썬 인메모리에서 시간순(`reversed`)으로 재배열하여 주입.
    - DB 에러 발생 시에도 전체 대화가 멈추지 않도록 빈 리스트(`[]`)를 반환하는 장애 격리(Fault Tolerance) 구현.
 3. **`get_list_chat` (내 전체 대화 목록 조회 - SELECT)**:
    - **호출 체인**: `GET /api/me/chats` (라우터 `chat.py`) ➔ `get_my_chat` (서비스 `chat_main.py`) ➔ `get_list_chat` (DB 계층 `chat_db.py`).
@@ -63,7 +69,7 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
 
 ---
 
-## 2. 아키텍처 핵심 인사이트
+## 2. 아키텍처 및 자료구조 핵심 인사이트
 1. **단일 서버 아키텍처**:
    - `Jinja2`를 활용하여 파이썬 단일 서버 내에서 프론트엔드 정적 리소스 서빙과 백엔드 REST API를 모두 처리하여 배포 및 인프라 복잡도를 최소화.
 2. **관심사의 완벽한 분리 (Separation of Concerns)**:
@@ -71,14 +77,21 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
    - **Service/Orchestration (`app/services/chat_main.py`)**: 비즈니스 흐름 제어, 타임아웃 제어, 트랜잭션 조율.
    - **External Integration (`app/services/AI_connect.py`)**: LLM 연동, 토큰/프롬프트 빌딩, 재시도/폴백.
    - **Persistence (`app/services/chat_db.py`)**: 데이터베이스 쿼리 및 데이터 영속화.
-3. **장애 격리 및 고가용성 (Fault Tolerance)**:
+3. **자료구조 관점의 데이터 흐름 (스택 vs 큐)**:
+   - **스택(Stack, LIFO) ➔ `chat_db.get_history`**: DB에서 가장 마지막에 추가된 최신 N건을 `DESC LIMIT`으로 꺼낸 후, 파이썬 메모리에서 `reversed()`로 순서를 복원하여 AI가 읽을 자연스러운 시간 흐름 구성.
+   - **큐(Queue, FIFO) ➔ `AI_connect.build_contents`**: 프롬프트 글자 수 한도 초과 시, 가장 오래된 대화(0번 인덱스)부터 `pop(0)`으로 순차 제거하여 슬라이딩 윈도우 유지.
+4. **SQL 성능 최적화: 왜 `DESC LIMIT` + `reversed()`인가?**:
+   - 처음부터 `ORDER BY id ASC LIMIT N`을 날리면 방 생성 초기의 '가장 오래된 N건'이 조회되는 치명적인 논리적 결함 발생.
+   - 이를 SQL만으로 해결하려면 서브쿼리(`SELECT * FROM (SELECT ... DESC LIMIT N) ORDER BY id ASC`)를 써야 하므로 DB 엔진에 이중 정렬 부하가 발생함.
+   - 따라서 DB에서는 단일 인덱스 스캔으로 `DESC LIMIT`만 수행하고, 파이썬 인메모리에서 0.0001초 만에 `reversed()` 하는 것이 실무 표준 최적화 패턴.
+5. **장애 격리 및 고가용성 (Fault Tolerance)**:
    - 외부 AI 서비스 지연에 대비한 `asyncio.wait_for` 기반 타임아웃 제어.
    - 문맥 조회 실패 시 빈 리스트 Fallback을 적용하여 단일 질문이라도 처리되도록 방어.
    - 에러 발생 시에도 비정상 종료(Crash)를 막고 Fallback 객체를 구성하여 DB에 실패 이력을 기록하는 감사(Audit) 추적성 확보.
-4. **심층 방어 (Defense in Depth)**:
+6. **심층 방어 (Defense in Depth)**:
    - 입력값 검증: 라우터 1차(Pydantic 타입) ➔ 서비스 2차(비즈니스 공백/길이 제한).
    - 출력값 검증: 1차(isinstance 반환 타입) ➔ 2차(품질 검사 및 에러 강등).
 
 ---
 *작업 브랜치: `docs/lgt-back/code-analysis`*  
-*문서 버전: v1.2*
+*문서 버전: v1.3*

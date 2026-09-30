@@ -47,46 +47,49 @@ class PromptPayload:
 def build_contents(
     # 사용자의 현재 질문 문자열
     question: str,
-    # chat_db.get_history에서 시간순으로 정렬되어 넘어온 이전 대화 목록
+    # [호출 흐름: chat_db.get_history ➔ chat_main.chat ➔ AI_connect.generate_answer ➔ build_contents]
+    # 자연스러운 대화 맥락 유지를 위해 '과거 ➔ 최신' 시간순으로 정렬되어 넘어온 이전 대화 턴 목록
     history: Iterable[dict[str, Any]] | None = None,
 ) -> PromptPayload:
     """성공한 대화를 오래된 순서로 받아 최근 턴과 길이 제한을 적용한다."""
-    # 유효한 질문과 답변 쌍이 모두 존재하는 대화 턴(Turn)만 선별
+    # 리스트 컴프리헨션: 과거 대화 중 question과 answer가 모두 존재하는 정상 데이터만 필터링 (불량 데이터 제거)
+    # (동작: for t in history 돌며 if t.get('question') and t.get('answer') 조건을 만족하는 것만 새 리스트에 수집)
     turns: list[dict[str, Any]] = [
         t for t in (history or [])
         if t.get("question") and t.get("answer")
     ]
-    # 설정에 정의된 최대 문맥 턴 수(AI_CONTEXT_TURNS)만큼 최근 대화만 슬라이싱
+    # 음수 인덱스 슬라이싱([-N:]): 리스트 맨 뒤에서부터 N개를 잘라내어 가장 최근 대화만 유지 (토큰 낭비 방지)
     turns = turns[-AI_CONTEXT_TURNS:]
 
     # 글자 수 제한 초과로 인한 과거 대화 절삭 여부 플래그
     truncated = False
-    # 전체 대화 텍스트 길이가 허용 한도(MAX_CONTEXT_CHARS) 이하가 될 때까지 오래된 대화부터 제거
+    # 전체 대화 텍스트 길이가 허용 한도(MAX_CONTEXT_CHARS) 이하가 될 때까지 오래된 대화부터 큐(Queue, FIFO) 방식으로 제거
     while turns:
         # 현재 남은 대화 턴들의 질문/답변 글자 수 총합 계산
         total = sum(len(t["question"]) + len(t["answer"]) for t in turns)
         # 과거 대화 총 글자 수 + 현재 질문 글자 수가 최대 허용한도 이내이면 루프 탈출
         if total + len(question) <= MAX_CONTEXT_CHARS:
             break
-        # 한도 초과 시 가장 오래된 대화(0번 인덱스)를 제거하여 최신 문맥 보존
+        # 한도 초과 시 가장 오래된 대화(0번 인덱스)를 먼저 꺼내 버림 (First-In First-Out)
         turns.pop(0)
         # 문맥 절삭 플래그 활성화
         truncated = True
 
-    # Google Gemini API의 대화형 contents 포맷 리스트 초기화
+    # Google Gemini API가 요구하는 대화형 규격(User ➔ Model ➔ User 핑퐁 대화) 리스트 초기화 (빈 바구니 생성)
     contents: list[dict[str, Any]] = []
-    # 정제된 과거 대화 턴들을 user(사용자)와 model(AI)의 롤(Role) 기반 메시지로 변환
+    # 정제된 과거 대화 턴들을 user(사용자 질문)와 model(AI 답변)의 역할(Role) 기반 메시지로 번갈아 추가
     for turn in turns:
-        # 사용자 질문 메시지 추가
+        # 1) 사용자 과거 질문 추가
         contents.append({"role": "user" , "parts": [{"text": turn["question"]}]})
-        # AI 모델의 이전 답변 메시지 추가
+        # 2) AI 모델의 과거 답변 추가
         contents.append({"role": "model", "parts": [{"text": turn["answer"]}]})
-    # 대화 흐름의 맨 마지막에 현재 사용자의 신규 질문 추가
+    # 3) 대화 흐름의 맨 마지막에 현재 사용자의 신규 질문을 user 역할로 추가하여 문맥 완성
     contents.append({"role": "user", "parts": [{"text": question}]})
 
-    # 기본 시스템 지침(System Prompt) 할당
+    # 기본 시스템 지침(System Prompt) 할당 (AI의 역할/페르소나 지정)
     system_instruction = SYSTEM_PROMPT
-    # 글자 수 한도로 인해 과거 대화가 잘려나간 경우, AI에게 문맥 생략 안내 문구 추가
+    # 인과관계: 위 while 루프에서 대화가 잘렸는지(truncated=True) 계산이 끝난 후에만 경고문 부착 가능
+    # 글자 수 한도로 인해 과거 대화가 잘려나간 경우, AI에게 문맥 생략 안내 문구(CONTEXT_TRUNCATED_NOTICE) 추가
     if truncated:
         system_instruction = f"{SYSTEM_PROMPT}\n\n{CONTEXT_TRUNCATED_NOTICE}"
 

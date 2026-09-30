@@ -46,7 +46,10 @@
 - **함수 연동 메커니즘**: `chat_main.py`의 `AI_connect.generate_answer(...)` 호출은 `AI_connect.py`의 `async def generate_answer(...) -> AIResult`로 연결되며, 리턴값이 `chat_main.py`의 `result` 변수로 전달됨.
 - **`status="success"`의 기원**: 외부 LLM(Gemini 등) 모델과의 통신이 성공하여 정상 텍스트 답변이 생성되었을 때, `AI_connect.py` 285번째 줄에서 `AIResult(status="success", ...)` 객체가 최초 생성되어 반환됨.
 - **프롬프트 빌더 파이프라인 (`build_contents`)**:
-  1. **불량 데이터 필터링**: 리스트 컴프리헨션(`[t for t in history if t.get('question') and t.get('answer')]`)으로 질문과 답변이 온전한 정상 턴만 선별.
+  1. **불량 데이터 필터링**: 리스트 컴프리헨션(`[t for t in (history or []) if t.get('question') and t.get('answer')]`)으로 질문과 답변이 온전한 정상 턴만 선별.
+     - **자연스러운 해석 순서**: `for t in (history or [])`(1단계: 꺼내기) ➔ `if t.get('question') and t.get('answer')`(2단계: 검증) ➔ 맨 앞 `t`(3단계: 채택하여 바구니에 담기).
+     - **방어 코드**: `(history or [])`를 통해 `history`가 `None`일 때도 순회 에러(`TypeError`) 없이 빈 리스트로 안전하게 처리.
+     - **성능 이점**: 파이썬 C 레벨 최적화로 일반 `for`문 + `append()`보다 약 20~30% 빠른 실행 속도 제공.
   2. **최근 턴 슬라이싱**: 음수 인덱스 슬라이싱(`turns[-AI_CONTEXT_TURNS:]`)으로 최근 대화만 남겨 토큰 낭비 방지.
   3. **큐(Queue, FIFO) 기반 글자 수 절삭**: 총 글자 수가 `MAX_CONTEXT_CHARS`를 넘으면 `turns.pop(0)`을 통해 가장 오래된 대화부터 순차 제거(First-In First-Out)하여 최신 문맥 보존.
   4. **Gemini 규격 맵핑**: 사용자(`user`)와 AI 모델(`model`)의 롤 기반 핑퐁 메시지로 변환 후, 맨 마지막에 현재 질문 추가.

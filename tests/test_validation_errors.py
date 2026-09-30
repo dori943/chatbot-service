@@ -197,8 +197,24 @@ def test_auth_validation(client, payload):
         assert "input" not in response.json()
 
 
-def test_auth_boundaries_duplicate_and_wrong_credentials(client):
-    credentials = {"id": "a" * 50, "pw": "가" * 24, "admin": True}
+@pytest.mark.parametrize("payload", [
+    {"id": "ab", "pw": "12345678"}, {"id": " ab ", "pw": "12345678"},
+    {"id": "가나", "pw": "12345678"}, {"id": "new", "pw": "1234567"},
+    {"id": "new", "pw": "🙂" * 7},
+])
+def test_registration_rejects_short_credentials(client, database, payload):
+    response = client.post("/auth/register", json=payload)
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+    with database() as db:
+        assert db.get(Login, payload["id"].strip()) is None
+
+
+@pytest.mark.parametrize("user_id,password", [
+    (" abc ", "12345678"), ("가나다", "🙂" * 8), ("a" * 50, "가" * 24),
+])
+def test_auth_boundaries_duplicate_and_wrong_credentials(client, user_id, password):
+    credentials = {"id": user_id, "pw": password, "admin": True}
     assert client.post("/auth/register", json=credentials).status_code == 200
     assert client.post("/auth/login", json=credentials).status_code == 200
     response = client.post("/auth/register", json=credentials)
@@ -208,6 +224,15 @@ def test_auth_boundaries_duplicate_and_wrong_credentials(client):
         response = client.post("/auth/login", json=invalid)
         assert response.status_code == 401
         assert response.json()["error_code"] == "UNAUTHORIZED"
+
+
+def test_existing_short_credentials_can_still_log_in(client, database):
+    with database() as db:
+        db.add(Login(id="ab", pw=auth.hash_password("short")))
+        db.commit()
+    response = client.post("/auth/login", json={"id": " ab ", "pw": "short"})
+    assert response.status_code == 200
+    assert response.json()["token"]
 
 
 @pytest.mark.parametrize("user_id", ["space user", "a" * 50], ids=["internal-space", "max-length"])
@@ -245,7 +270,7 @@ def test_auth_database_failure_and_unexpected_error(client, monkeypatch):
         raise RuntimeError("private-error")
 
     monkeypatch.setattr(auth, "hash_password", broken_hash)
-    response = client.post("/auth/register", json={"id": "new", "pw": "test"})
+    response = client.post("/auth/register", json={"id": "new", "pw": "test-password"})
     assert response.status_code == 500
     assert response.json()["error_code"] == "INTERNAL_ERROR"
     assert "private-error" not in response.text

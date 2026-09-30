@@ -1,4 +1,4 @@
-import { getAccessToken, getAuthenticatedId, clearAuth } from './auth.js';
+import { getAccessToken, getAuthenticatedId, clearAuth, openLogin } from './auth.js';
 import { requestReply } from './chat-api.js';
 
 const MAX_QUESTION_LENGTH = 5000;
@@ -12,18 +12,31 @@ function getElement(id) {
 const brand = '담다';
 const guestStorageKey = 'damda-chat-v1';
 const storageKeyFor = id => id ? `${guestStorageKey}:user:${encodeURIComponent(id)}` : guestStorageKey;
-let storageKey = storageKeyFor(getAuthenticatedId());
+let ownerId = getAuthenticatedId();
+let storageKey = storageKeyFor(ownerId);
+let draft = null;
 let chats = [];
 let activeId = null;
 let pending = null;
+let retryRoom = null;
 let toastTimer;
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// 공개 HTTP 주소에서도 방 ID를 만들 수 있게 secure context 전용 UUID API를 보완한다.
+const uid = () => crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
 
 // 브라우저 안에서 게스트와 각 로그인 ID의 대화를 따로 저장합니다.
 function loadChats() {
   try {
     const loaded = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    return Array.isArray(loaded) ? loaded.filter(isValidChat).slice(0, MAX_CHATS) : [];
+    return Array.isArray(loaded) ? loaded.filter(isValidChat).slice(0, MAX_CHATS).map(chat => {
+      // 이전 slice(0, 30)으로 잘린 이모지 제목은 UTF-8 저장이 가능하도록 복원한다.
+      const wellFormed = text => Array.from(text, character =>
+        character.length === 1 && character >= '\uD800' && character <= '\uDFFF' ? '\uFFFD' : character).join('');
+      if (!chat.title.trim() || Array.from(chat.title).length > 100 || wellFormed(chat.title) !== chat.title) {
+        const firstQuestion = chat.messages.find(message => message.role === 'user')?.text || '새로운 대화';
+        chat.title = Array.from(wellFormed(firstQuestion)).slice(0, 30).join('');
+      }
+      return chat;
+    }) : [];
   } catch (_) {
     return [];
   }
@@ -38,8 +51,10 @@ function isValidChat(chat) {
 function save() {
   try {
     localStorage.setItem(storageKey, JSON.stringify(chats.slice(0, MAX_CHATS)));
+    return true;
   } catch (_) {
-    toast('브라우저 저장 공간을 사용할 수 없어 이번 화면에서만 유지됩니다.');
+    toast('저장하지 못했습니다. 새로고침하면 이전 기록이 다시 나타나거나 이번 변경이 사라질 수 있습니다.');
+    return false;
   }
 }
 
@@ -72,6 +87,8 @@ function renderHistory() {
     button.disabled = !!pending;
     button.addEventListener('click', () => {
       if (pending) return;
+      retryRoom = null;
+      setStatus();
       activeId = c.id;
       renderChat();
       renderHistory();
@@ -124,10 +141,12 @@ function renderChat() {
       if (pending) return;
       chats = chats.filter(c => c.id !== activeId);
       activeId = null;
-      save();
+      retryRoom = null;
+      setStatus();
+      const saved = save();
       renderHistory();
       renderChat();
-      toast('이 브라우저에서 대화를 삭제했습니다.');
+      if (saved) toast('이 브라우저에서 대화를 삭제했습니다.');
     });
     tools.append(remove);
     getElement('transcript').append(tools);
@@ -161,6 +180,8 @@ function renderChat() {
 }
 
 function updateInput() {
+  if (!ownerId && draft) draft.question = getElement('question').value;
+  if (retryRoom && getElement('question').value.trim() !== retryRoom.question) getElement('retry').hidden = true;
   const count = Array.from(getElement('question').value).length;
   getElement('char-count').textContent = count.toLocaleString() + ' / ' + MAX_QUESTION_LENGTH.toLocaleString();
   getElement('question').style.height = 'auto';
@@ -169,7 +190,9 @@ function updateInput() {
 
 function newChat() {
   if (pending) return;
+  if (!ownerId) draft = null;
   activeId = null;
+  retryRoom = null;
   getElement('question').value = '';
   setStatus();
   updateInput();
@@ -179,31 +202,50 @@ function newChat() {
   getElement('question').focus();
 }
 
-function setStatus(message = '', type = 'info') {
+function setStatus(message = '', type = 'info', { requestId = null, retry = false, login = false } = {}) {
   const status = getElement('status');
   status.dataset.state = type;
   status.setAttribute('role', type === 'error' ? 'alert' : 'status');
   status.textContent = message;
+  getElement('question').removeAttribute('aria-invalid');
+  getElement('request-id').textContent = requestId ? `요청 ID: ${requestId}` : '';
+  getElement('request-id').hidden = !requestId;
+  getElement('retry').hidden = !retry;
+  getElement('reauth').hidden = !login;
 }
 
 function setBusy(value) {
   getElement('send').hidden = value;
   getElement('stop').hidden = !value;
   getElement('question').disabled = value;
+  getElement('chat-form').setAttribute('aria-busy', String(value));
+  getElement('transcript').setAttribute('aria-busy', String(value));
+  getElement('retry').disabled = value;
   document.querySelectorAll('[data-new], [data-prompt], .history-item, .delete-chat').forEach(b => b.disabled = value);
 }
 
-function switchChatOwner(id) {
+function switchChatOwner(id, reason) {
   const nextStorageKey = storageKeyFor(id);
   if (nextStorageKey === storageKey) return;
+  const preserveDraft = ownerId && !id && ['expired', 'unauthorized'].includes(reason);
+  if (preserveDraft) {
+    draft = { id: ownerId, question: getElement('question').value, activeId };
+  } else if (id !== draft?.id) {
+    draft = null;
+  }
   pending?.abort();
   pending = null;
+  retryRoom = null;
   storageKey = nextStorageKey;
+  ownerId = id;
   chats = loadChats();
-  activeId = null;
-  getElement('question').value = '';
+  const restoreDraft = id && draft?.id === id;
+  activeId = restoreDraft && chats.some(chat => chat.id === draft.activeId) ? draft.activeId : null;
+  getElement('question').value = preserveDraft || restoreDraft ? draft.question : '';
+  if (restoreDraft) draft = null;
   getElement('history-search').value = '';
   setStatus();
+  if (preserveDraft) setStatus('로그인이 만료됐습니다. 같은 계정으로 다시 로그인하면 질문을 이어서 보낼 수 있습니다.', 'error');
   setBusy(false);
   updateInput();
   renderHistory();
@@ -216,7 +258,7 @@ async function handleSubmit(event) {
   if (pending) return;
   if (!getAuthenticatedId()) {
     clearAuth();
-    setStatus('로그인 후 질문을 보내 주세요.', 'error');
+    setStatus('로그인 후 질문을 보내 주세요.', 'error', { login: true });
     return;
   }
   const question = getElement('question').value.trim();
@@ -233,8 +275,8 @@ async function handleSubmit(event) {
   const isNewChat = !current;
   if (!current) {
     current = {
-      id: uid(),
-      title: Array.from(question).slice(0, 30).join(''),
+      id: retryRoom?.id || uid(),
+      title: retryRoom?.title || Array.from(question).slice(0, 30).join(''),
       messages: []
     };
     chats.unshift(current);
@@ -252,7 +294,7 @@ async function handleSubmit(event) {
   renderChat();
   renderHistory();
   setBusy(true);
-  setStatus('답변을 기다리고 있어요…');
+  setStatus('답변을 기다리고 있어요…', 'loading');
   try {
     const reply = await requestReply(question, current.id, current.title, token, controller.signal);
     if (pending !== controller || storageKey !== requestStorageKey) return;
@@ -261,6 +303,7 @@ async function handleSubmit(event) {
       text: reply
     });
     getElement('question').value = '';
+    retryRoom = null;
     setStatus();
     save();
   } catch (error) {
@@ -270,13 +313,20 @@ async function handleSubmit(event) {
       chats = previousChats;
       activeId = null;
     }
-    if (error.status === 401) clearAuth(token);
     const cancelled = error.name === 'AbortError';
+    // 코드가 없는 프록시 오류에만 HTTP 상태를 보조 기준으로 사용한다.
+    const code = error.errorCode || ({ 401: 'UNAUTHORIZED', 422: 'INVALID_INPUT', 429: 'AI_RATE_LIMIT', 504: 'AI_TIMEOUT' })[error.status];
+    const unauthorized = code === 'UNAUTHORIZED' || error.status === 401;
+    if (unauthorized) clearAuth(token);
+    else retryRoom = { id: current.id, title: current.title, question };
     setStatus(
       cancelled ? '응답 대기를 중지했어요. 입력한 질문은 남겨두었습니다.'
         : (error.message || '응답을 받지 못했어요. 다시 시도해 주세요.'),
-      cancelled ? 'info' : 'error'
+      cancelled ? 'info' : 'error',
+      { requestId: error.requestId, retry: !unauthorized && ['AI_TIMEOUT', 'CLIENT_TIMEOUT'].includes(code), login: unauthorized && !getAuthenticatedId() }
     );
+    if (unauthorized && !getAuthenticatedId()) openLogin();
+    if (code === 'INVALID_INPUT') getElement('question').setAttribute('aria-invalid', 'true');
   } finally {
     if (pending === controller) {
       pending = null;
@@ -284,7 +334,7 @@ async function handleSubmit(event) {
       renderChat();
       renderHistory();
       updateInput();
-      getElement('question').focus();
+      if (!getElement('auth-dialog').open) getElement('question').focus();
     }
   }
 }
@@ -293,7 +343,12 @@ async function handleSubmit(event) {
 function bindChatEvents() {
   getElement('chat-form').addEventListener('submit', handleSubmit);
   getElement('stop').addEventListener('click', () => pending?.abort());
-  getElement('question').addEventListener('input', updateInput);
+  getElement('retry').addEventListener('click', () => getElement('chat-form').requestSubmit());
+  getElement('reauth').addEventListener('click', openLogin);
+  getElement('question').addEventListener('input', () => {
+    getElement('question').removeAttribute('aria-invalid');
+    updateInput();
+  });
   getElement('question').addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -319,7 +374,7 @@ function bindChatEvents() {
 }
 
 chats = loadChats();
-window.addEventListener('authchange', event => switchChatOwner(event.detail.id));
+window.addEventListener('authchange', event => switchChatOwner(event.detail.id, event.detail.reason));
 bindChatEvents();
 updateInput();
 renderHistory();

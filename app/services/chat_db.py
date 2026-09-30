@@ -10,6 +10,8 @@ from app.schemas.chat       import AIResult
 from app.models.chatlog     import ChatLog
 
 
+# [데이터 매핑 1단계: 입력 전달]
+# chat_main.py로부터 작업 데이터를 함수 파라미터로 넘겨받음 (AI 결과는 복합 객체인 result: AIResult로 묶여서 전달됨)
 # 사용자 질문 및 AI 처리 결과(성공 답변 또는 에러 내역)를 DB에 저장(INSERT)
 async def save_result(
     # 비동기 데이터베이스 세션 객체
@@ -22,34 +24,36 @@ async def save_result(
     room_name : str,
     # 사용자가 입력한 질문 원문
     question  : str,
-    # AI 처리 결과 객체 (성공 답변, 에러 코드, 레이턴시 등 포함)
+    # AI 처리 결과 객체 (성공 답변, 에러 코드, 레이턴시 등이 묶여 있는 복합 객체)
     result    : AIResult,
 ):
     # 현재 시각을 UTC 기준 timezone-aware 객체로 생성
     created_at = datetime.now(timezone.utc)
 
     try:
-        # 데이터베이스 ChatLog ORM 테이블 모델 객체 인스턴스화
+        # [데이터 매핑 2단계: DB 테이블 규격으로 분해 및 조립]
+        # DB는 파이썬 복합 객체(result)를 직접 저장할 수 없으므로, ChatLog 테이블의 각 컬럼 칸에 1:1로 매핑하여 엔티티(Row) 생성
+        # (문법 안내: 좌측 명칭은 DB 테이블의 컬럼명, 우측 값은 위쪽 파라미터 및 result 객체에서 꺼낸 실제 데이터)
         row = ChatLog(
-            # 사용자 식별자 매핑
+            # 사용자 식별자 매핑 (DB 컬럼 user_id = 파라미터 user_id)
             user_id    = user_id,
-            # 대화방 식별자 매핑
+            # 대화방 식별자 매핑 (DB 컬럼 room_id = 파라미터 room_id)
             room_id    = room_id,
-            # 대화방 이름 매핑
+            # 대화방 이름 매핑 (DB 컬럼 room_name = 파라미터 room_name)
             room_name  = room_name,
-            # 사용자 질문 원문 매핑
+            # 사용자 질문 원문 매핑 (DB 컬럼 question = 파라미터 question)
             question   = question,
-            # AI 답변 내용 매핑 (에러 시 None)
+            # AI 답변 내용 매핑 (DB 컬럼 answer = 복합 객체 result 내부의 answer 속성값)
             answer     = result.answer,
-            # 처리 상태값 매핑 ('success', 'timeout', 'error')
+            # 처리 상태값 매핑 (DB 컬럼 status = result 내부의 status 속성값)
             status     = result.status,
-            # 실패 시 에러 코드 매핑 (성공 시 None)
+            # 실패 시 에러 코드 매핑 (DB 컬럼 error_code = result 내부의 error_code 속성값)
             error_code = result.error_code,
-            # AI 호출 레이턴시(ms) 매핑
+            # AI 호출 레이턴시(ms) 매핑 (DB 컬럼 latency_ms = result 내부의 latency_ms 속성값)
             latency_ms = result.latency_ms,
-            # 요청 추적용 상관관계 식별자(UUID) 매핑
+            # 요청 추적용 상관관계 식별자 매핑 (DB 컬럼 request_id = result 내부의 request_id 속성값)
             request_id = result.request_id,
-            # 생성에 사용된 AI 모델명 매핑
+            # 생성에 사용된 AI 모델명 매핑 (DB 컬럼 model = result 내부의 model 속성값)
             model      = result.model,
             # DB 저장을 위해 타임존 정보를 제거한 naive UTC datetime으로 변환
             created_at = created_at.replace(tzinfo=None),

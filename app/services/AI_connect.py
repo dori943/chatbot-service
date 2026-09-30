@@ -42,39 +42,63 @@ class PromptPayload:
     truncated          : bool = False
 
 
+# [프롬프트 빌더]
+# 사용자의 현재 질문과 DB에서 가져온 과거 대화 이력을 결합하여 Google Gemini API 규격의 PromptPayload로 조립
 def build_contents(
+    # 사용자의 현재 질문 문자열
     question: str,
+    # chat_db.get_history에서 시간순으로 정렬되어 넘어온 이전 대화 목록
     history: Iterable[dict[str, Any]] | None = None,
 ) -> PromptPayload:
     """성공한 대화를 오래된 순서로 받아 최근 턴과 길이 제한을 적용한다."""
+    # 유효한 질문과 답변 쌍이 모두 존재하는 대화 턴(Turn)만 선별
     turns: list[dict[str, Any]] = [
         t for t in (history or [])
         if t.get("question") and t.get("answer")
     ]
+    # 설정에 정의된 최대 문맥 턴 수(AI_CONTEXT_TURNS)만큼 최근 대화만 슬라이싱
     turns = turns[-AI_CONTEXT_TURNS:]
 
+    # 글자 수 제한 초과로 인한 과거 대화 절삭 여부 플래그
     truncated = False
+    # 전체 대화 텍스트 길이가 허용 한도(MAX_CONTEXT_CHARS) 이하가 될 때까지 오래된 대화부터 제거
     while turns:
+        # 현재 남은 대화 턴들의 질문/답변 글자 수 총합 계산
         total = sum(len(t["question"]) + len(t["answer"]) for t in turns)
+        # 과거 대화 총 글자 수 + 현재 질문 글자 수가 최대 허용한도 이내이면 루프 탈출
         if total + len(question) <= MAX_CONTEXT_CHARS:
             break
+        # 한도 초과 시 가장 오래된 대화(0번 인덱스)를 제거하여 최신 문맥 보존
         turns.pop(0)
+        # 문맥 절삭 플래그 활성화
         truncated = True
 
+    # Google Gemini API의 대화형 contents 포맷 리스트 초기화
     contents: list[dict[str, Any]] = []
+    # 정제된 과거 대화 턴들을 user(사용자)와 model(AI)의 롤(Role) 기반 메시지로 변환
     for turn in turns:
+        # 사용자 질문 메시지 추가
         contents.append({"role": "user" , "parts": [{"text": turn["question"]}]})
+        # AI 모델의 이전 답변 메시지 추가
         contents.append({"role": "model", "parts": [{"text": turn["answer"]}]})
+    # 대화 흐름의 맨 마지막에 현재 사용자의 신규 질문 추가
     contents.append({"role": "user", "parts": [{"text": question}]})
 
+    # 기본 시스템 지침(System Prompt) 할당
     system_instruction = SYSTEM_PROMPT
+    # 글자 수 한도로 인해 과거 대화가 잘려나간 경우, AI에게 문맥 생략 안내 문구 추가
     if truncated:
         system_instruction = f"{SYSTEM_PROMPT}\n\n{CONTEXT_TRUNCATED_NOTICE}"
 
+    # 최종 조립된 프롬프트 페이로드(내용, 시스템 프롬프트, 사용된 턴 수, 절삭 여부) 반환
     return PromptPayload(
+        # 조립된 다자간 대화 메시지 구조체 리스트
         contents           = contents,
+        # 모델의 행동 및 답변 스타일을 통제하는 시스템 프롬프트
         system_instruction = system_instruction,
+        # 문맥 구성에 실제로 사용된 대화 턴 수
         turns_used         = len(turns),
+        # 글자 수 초과로 과거 대화가 잘렸는지 여부
         truncated          = truncated,
     )
 

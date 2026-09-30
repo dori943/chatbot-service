@@ -54,7 +54,18 @@
   3. **큐(Queue, FIFO) 기반 글자 수 절삭**: 총 글자 수가 `MAX_CONTEXT_CHARS`를 넘으면 `turns.pop(0)`을 통해 가장 오래된 대화부터 순차 제거(First-In First-Out)하여 최신 문맥 보존.
   4. **Gemini 규격 맵핑**: 사용자(`user`)와 AI 모델(`model`)의 롤 기반 핑퐁 메시지로 변환 후, 맨 마지막에 현재 질문 추가.
   5. **동적 시스템 프롬프트 통제**: 대화가 절삭된 경우(`if truncated:`) AI에게 과거 대화 일부가 생략되었음을 알리는 경고문(`CONTEXT_TRUNCATED_NOTICE`)을 동적으로 부착.
-- **재시도 및 모델 폴백**: 주 모델 호출 실패 시 재시도(`AI_MAX_RETRIES`) 및 백업 폴백 모델(`AI_FALLBACK_MODEL`)로 자동 전환하는 안전장치 구비.
+- **설정 빌더 및 2중 타임아웃 방어 (`_build_config` & `_call_once`)**:
+  - `_build_config`: `temperature`, `max_output_tokens`, 초 ➔ ms 변환 `http_options`, 불필요한 왕복 지연을 막는 `automatic_function_calling(disable=True)`, 구버전 SDK 대응 다운그레이드 폴백(`try ... except TypeError`) 적용.
+  - `_call_once`: SDK 내부 소켓 타임아웃뿐만 아니라 파이썬 이벤트 루프 레벨의 `asyncio.wait_for`를 결합한 **2중 타임아웃 방어막**으로 서버 행(Hang) 현상 원천 차단.
+- **최상위 오케스트레이터 (`generate_answer`) 의 6대 내결함성(Fault Tolerance) 메커니즘**:
+  1. **후보군 등록 (`candidates`)**: 주 모델(`AI_MODEL`)과 보조 모델(`AI_FALLBACK_MODEL`)을 순차 배열로 패키징.
+  2. **시간 예산(`budget`) 동적 제어**: 전체 제한시간(`AI_TOTAL_TIMEOUT_SECONDS`)에서 소요 시간을 뺀 `remaining()`을 실시간 계산하고, 폴백 시도 잔여 시간이 `MIN_FALLBACK_BUDGET_SECONDS` 미만이면 무리한 호출 없이 조기 종료(Fast Fail).
+  3. **2중 중첩 복구 루프**: `[외부] 모델 교체 루프(candidates)` ➔ `[내부] 동일 모델 재시도 루프(AI_MAX_RETRIES)` 구조로 장애를 단계별로 격리.
+  4. **지수 백오프 (Exponential Backoff)**: 재시도 시 `0.5 * (attempt + 1)`초 동안 점진적으로 대기시간을 늘려 외부 LLM 서버의 일시적 과부하 회복 유도.
+  5. **지능형 실패 감별**:
+     - 동일 모델 재시도 대상(`RETRY_SAME_MODEL`): 503 서버 과부하, 429 할당량 초과, 일시적 네트워크 순단. (401 키 오류나 400은 재시도 무의미하므로 즉시 중단)
+     - 모델 교체 폴백 대상(`FALLBACK_TRIGGERS`): 특정 모델 장애 시에만 예비 모델로 넘어가며, 유해성 검열(BLOCKED) 등 다른 모델로도 해결 안 되는 에러는 즉시 루프 중단.
+  6. **무장애 결과 포장**: 모든 시도가 실패해도 서버가 죽지 않고 에러별 친절한 한국어 안내 메시지를 담은 `AIResult(status='timeout'|'error')` 대체 객체를 안전하게 반환.
 
 ### 7단계: 데이터베이스 영속화 계층 (`app/services/chat_db.py`)
 SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 영속성(Persistence)과 트랜잭션을 전담합니다:

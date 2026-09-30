@@ -202,6 +202,7 @@ def validate_result(result: AIResult):
     result.user_message = USER_MESSAGES.get(result.error_code, USER_MESSAGES[ErrorCode.UNKNOWN])
 
 
+# [호출 경로: GET /api/me/chats (chat.py) ➔ get_my_chat (chat_main.py) ➔ chat_db.get_list_chat]
 # 현재 로그인한 사용자의 전체 채팅 내역 목록 조회
 async def get_my_chat(user_id: str, db: AsyncSession):
     # DB 계층(chat_db)을 호출하여 해당 사용자의 채팅 레코드 목록(Row) 조회

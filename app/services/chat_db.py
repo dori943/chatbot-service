@@ -81,7 +81,9 @@ async def save_result(
         ) from None
 
 
-# 특정 사용자의 전체 대화 기록 목록 조회
+# [호출 경로: GET /api/me/chats (chat.py) ➔ get_my_chat (chat_main.py) ➔ get_list_chat]
+# 특정 사용자의 전체 대화 기록 목록 조회 (사이드바 대화 목록 렌더링용)
+# UI 표시에 필요한 컬럼만 프로젝션(SELECT)하고 최신순(created_at.desc)으로 정렬하여 반환
 async def get_list_chat(user_id: str, db: AsyncSession):
     try:
         # 데이터베이스에서 해당 사용자의 채팅 로그를 조회하는 쿼리 비동기 실행

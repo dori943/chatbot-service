@@ -57,7 +57,9 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
    - 최근 N개(`limit`)를 역순 조회(`order_by(ChatLog.id.desc())`) 후 시간순(`reversed`)으로 재배열하여 주입.
    - DB 에러 발생 시에도 전체 대화가 멈추지 않도록 빈 리스트(`[]`)를 반환하는 장애 격리(Fault Tolerance) 구현.
 3. **`get_list_chat` (내 전체 대화 목록 조회 - SELECT)**:
-   - 현재 사용자의 전체 대화 기록을 최신순으로 조회하여 반환.
+   - **호출 체인**: `GET /api/me/chats` (라우터 `chat.py`) ➔ `get_my_chat` (서비스 `chat_main.py`) ➔ `get_list_chat` (DB 계층 `chat_db.py`).
+   - 현재 사용자의 전체 대화 기록을 최신순(`created_at.desc()`, `id.desc()`)으로 조회.
+   - UI에 필요한 컬럼만 최적화하여 프로젝션(`select(...)`)하고, 조회 트랜잭션 완료 후 즉시 커밋(`await db.commit()`)하여 커넥션을 풀에 조기 반환.
 
 ---
 

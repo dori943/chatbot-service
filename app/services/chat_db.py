@@ -10,6 +10,7 @@ from app.schemas.chat       import AIResult
 from app.models.chatlog     import ChatLog
 
 
+# [호출 경로: POST /api/chat (chat.py) ➔ chat (chat_main.py) ➔ chat_db.save_result]
 # [데이터 매핑 1단계: 입력 전달]
 # chat_main.py로부터 작업 데이터를 함수 파라미터로 넘겨받음 (AI 결과는 복합 객체인 result: AIResult로 묶여서 전달됨)
 # 사용자 질문 및 AI 처리 결과(성공 답변 또는 에러 내역)를 DB에 저장(INSERT)
@@ -128,6 +129,7 @@ async def get_list_chat(user_id: str, db: AsyncSession):
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "대화 기록을 불러오지 못했습니다.") from None
 
 
+# [호출 경로: POST /api/chat (chat.py) ➔ chat (chat_main.py) ➔ chat_db.get_history]
 # AI 프롬프트 주입용 이전 대화 문맥(Context) 조회
 async def get_history(
     # 조회를 수행할 사용자 ID

@@ -27,6 +27,7 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
 
     try:
         # 비동기 함수 실행에 최대 대기 시간(타임아웃)을 적용하여 응답 대기
+        # (성공 시 AI_connect.py 285줄에서 status="success"로 생성된 AIResult 객체가 result에 할당됨)
         result = await asyncio.wait_for(
             # 실제 외부 LLM API와 통신하여 질문에 대한 답변을 생성하는 코루틴 호출
             AI_connect.generate_answer(
@@ -88,7 +89,8 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
         result    = result,
     )
 
-    # 최종 처리 상태가 성공(success)이 아니라면 클라이언트에 규격화된 HTTP 에러 반환
+    # 최종 처리 상태가 성공(status="success")이 아니라면 클라이언트에 규격화된 HTTP 에러 반환
+    # (참고: status="success"는 AI_connect.py에서 외부 AI 호출이 정상 완료되었을 때만 부여됨)
     if result.status != "success":
         # FastAPI 전역 예외 처리기로 위임할 APIError 예외 발생 (적절한 HTTP Status Code 매핑)
         raise APIError(

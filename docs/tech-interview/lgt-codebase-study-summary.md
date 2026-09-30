@@ -54,7 +54,7 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
    - `db.add()` 후 `await db.commit()`으로 즉시 영구 반영하며, 실패 시 `await db.rollback()` 후 503 에러 전파.
 2. **`get_history` (문맥용 과거 대화 조회 - SELECT)**:
    - AI 문맥 오염을 방지하기 위해 `status == 'success'`인 정상 대화 건만 엄격히 필터링.
-   - 최근 N개(`limit`)를 역순 조회(`order_by(ChatLog.id.desc())`) 후 시간순(`reversed`)으로 재배열하여 주입.
+   - 최근 N개(`limit`)를 자르기 위해 반드시 역순(`order_by(ChatLog.id.desc())`)으로 조회한 뒤, 파이썬 인메모리에서 시간순(`reversed`)으로 재배열하여 주입 (처음부터 ASC로 LIMIT을 걸면 가장 오래된 첫 5건이 조회되므로 이를 방지하고, 무거운 DB 서브쿼리 대신 파이썬 메모리에서 초고속으로 뒤집는 최적화 적용).
    - DB 에러 발생 시에도 전체 대화가 멈추지 않도록 빈 리스트(`[]`)를 반환하는 장애 격리(Fault Tolerance) 구현.
 3. **`get_list_chat` (내 전체 대화 목록 조회 - SELECT)**:
    - **호출 체인**: `GET /api/me/chats` (라우터 `chat.py`) ➔ `get_my_chat` (서비스 `chat_main.py`) ➔ `get_list_chat` (DB 계층 `chat_db.py`).

@@ -72,12 +72,27 @@ def build_contents(
     history: Iterable[dict[str, Any]] | None = None,
 ) -> PromptPayload:
     """성공한 대화를 오래된 순서로 받아 최근 턴과 길이 제한을 적용한다."""
-    # [1단계 실제 작용 지점: 정상 대화 턴 필터링]
-    # 리스트 컴프리헨션(List Comprehension) 문법: for문과 if문을 한 줄로 압축한 파이썬 특유의 목록 생성 기법
-    # (동일한 일반 코드: turns = [] ➔ for t in history: ➔ if t.get('question') and t.get('answer'): turns.append(t))
-    # -> 과거 대화(history) 중 질문과 답변이 둘 다 온전히 채워진 정상 데이터만 골라내어 turns 리스트에 새로 담음
+    # [1단계 실제 작용 지점: 정상 대화 턴 선별 및 필터링]
+    # -------------------------------------------------------------------------
+    # ■ 리스트 컴프리헨션(List Comprehension)이란?
+    #   - for 반복문과 if 조건문을 대괄호 [ ] 안에 압축하여 새 리스트를 생성하는 파이썬 고유 문법
+    #   - 동일한 일반 코드(4줄):
+    #       turns = []
+    #       for t in (history or []):
+    #           if t.get("question") and t.get("answer"):
+    #               turns.append(t)
+    #   - 장점: 코드 라인 수가 대폭 줄어들고, 파이썬 C 레벨 최적화로 일반 for문+append보다 약 20~30% 더 빠름
+    #
+    # ■ 자연스럽게 읽는 3단계 순서 (어순이 거꾸로 느껴질 땐 중간 ➔ 아래 ➔ 맨 앞 순으로 읽습니다):
+    #   1) [중간] for t in (history or [])             : history에서 대화 턴(t)을 하나씩 꺼낸다.
+    #   2) [아래] if t.get("question") and t.get("answer"): 꺼낸 t에 질문과 답변이 둘 다 온전히 있는지 확인한다.
+    #   3) [맨 앞] t                                   : 조건을 통과한 t만 최종 리스트의 원소로 채택한다!
+    # -------------------------------------------------------------------------
     turns: list[dict[str, Any]] = [
+        # [읽는 순서 1 & 3] history에서 꺼내고, 아래 검증을 통과했을 때 최종적으로 바구니에 담길 대화 턴(t)
+        # (history or []): history가 None이어도 에러(TypeError)가 나지 않도록 빈 리스트([])를 대신 순회하는 방어 코드
         t for t in (history or [])
+        # [읽는 순서 2] 유효성 필터링: 질문(question)과 답변(answer)이 둘 다 존재하는 정상 턴만 통과 (누락/빈값은 자동 탈락)
         if t.get("question") and t.get("answer")
     ]
     # [2단계 실제 작용 지점: 최근 대화 슬라이싱]

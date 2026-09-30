@@ -122,32 +122,48 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
     }
 
 
+# 2차 비즈니스 검증: 대화방 ID 유효성(공백 및 최대 길이) 검사
 def validate_room_id(data: ChatRequest) -> str:
+    # 문자열 앞뒤 공백 제거
     room_id = data.room_id.strip()
+    # 공백만 있거나 비어있는 경우 422 에러 발생
     if not room_id:
         raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID를 입력해 주세요.")
+    # 대화방 ID가 64자를 초과할 경우 422 에러 발생
     if len(room_id) > 64:
         raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID는 64자 이내로 입력해 주세요.")
+    # 유효성 검증을 통과한 정제된 대화방 ID 반환
     return room_id
 
 
+# 2차 비즈니스 검증: 대화방 이름 유효성(공백 및 최대 길이) 검사
 def validate_room_name(data: ChatRequest) -> str:
+    # 문자열 앞뒤 공백 제거
     room_name = data.room_name.strip()
+    # 공백만 있거나 비어있는 경우 422 에러 발생
     if not room_name:
         raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름을 입력해 주세요.")
+    # 대화방 이름이 100자를 초과할 경우 422 에러 발생
     if len(room_name) > 100:
         raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름은 100자 이내로 입력해 주세요.")
+    # 유효성 검증을 통과한 정제된 대화방 이름 반환
     return room_name
 
 
+# 2차 비즈니스 검증: 사용자 질문 유효성(공백 및 최대 길이) 검사
 def validate_question(data: ChatRequest) -> str:
+    # 문자열 앞뒤 공백 제거
     question = data.question.strip()
+    # 공백만 있거나 비어있는 경우 422 에러 발생
     if not question:
         raise APIError(422, ErrorCode.INVALID_INPUT, "질문을 입력해 주세요.")
 
+    # 환경설정의 최대 길이와 5,000자 중 작은 값을 허용 한도로 설정
     limit = min(config.MAX_QUESTION_LENGTH, 5000)
+    # 질문 글자 수가 제한을 초과할 경우 422 에러 발생
     if len(question) > limit:
         raise APIError(422, ErrorCode.INVALID_INPUT, f"질문은 {limit:,}자 이내로 입력해 주세요.")
+    # 유효성 검증을 통과한 정제된 질문 반환
     return question
 
 

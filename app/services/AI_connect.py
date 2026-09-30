@@ -85,12 +85,14 @@ def build_contents(
     #
     # ■ 자연스럽게 읽는 3단계 순서 (어순이 거꾸로 느껴질 땐 중간 ➔ 아래 ➔ 맨 앞 순으로 읽습니다):
     #   1) [중간] for t in (history or [])             : history에서 대화 턴(t)을 하나씩 꺼낸다.
+    #      * 왜 'or []'가 붙었는가?: history가 None일 때 'for t in None'이 실행되면 TypeError(순회 불가)로 서버가 죽으므로,
+    #        파이썬의 단락 평가(A가 None이면 뒤의 B 채택)를 이용해 빈 리스트([])를 대신 순회시키는 무결성 방어 코드
     #   2) [아래] if t.get("question") and t.get("answer"): 꺼낸 t에 질문과 답변이 둘 다 온전히 있는지 확인한다.
     #   3) [맨 앞] t                                   : 조건을 통과한 t만 최종 리스트의 원소로 채택한다!
     # -------------------------------------------------------------------------
     turns: list[dict[str, Any]] = [
         # [읽는 순서 1 & 3] history에서 꺼내고, 아래 검증을 통과했을 때 최종적으로 바구니에 담길 대화 턴(t)
-        # (history or []): history가 None이어도 에러(TypeError)가 나지 않도록 빈 리스트([])를 대신 순회하는 방어 코드
+        # 방어 기제: history가 None이면 'None or []' 연산으로 빈 리스트([])가 채택되어 TypeError 예외를 완벽 방어함
         t for t in (history or [])
         # [읽는 순서 2] 유효성 필터링: 질문(question)과 답변(answer)이 둘 다 존재하는 정상 턴만 통과 (누락/빈값은 자동 탈락)
         if t.get("question") and t.get("answer")

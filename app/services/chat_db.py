@@ -155,10 +155,12 @@ async def get_history(
                 ChatLog.status == "success",
             )
             # 최신 대화 순으로 정렬하여 지정된 개수(limit)만큼 슬라이싱
+            # (참고: 처음부터 ASC로 LIMIT을 걸면 가장 '오래된' 첫 대화들이 뽑히므로, '가장 최근' 대화를 자르기 위해 반드시 DESC를 사용함)
             .order_by(ChatLog.id.desc())
             .limit(limit)
         )
-        # 최신순으로 가져온 레코드를 시간순(과거 -> 최근)으로 반전시켜 프롬프트 규격 딕셔너리로 조립
+        # 최신순(DESC)으로 잘라온 N개 레코드를 파이썬 메모리에서 시간순(과거 -> 최근)으로 반전시켜 프롬프트 규격 딕셔너리로 조립
+        # (DB 서브쿼리로 정렬하는 것보다 파이썬 인메모리 reversed()가 DB 부하를 줄이고 훨씬 빠름)
         history = [
             {"question": row.question, "answer": row.answer}
             for row in reversed(rows.all())

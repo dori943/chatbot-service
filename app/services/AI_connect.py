@@ -282,14 +282,23 @@ async def generate_answer(
                         fallback   = is_fallback,
                         a_len      = len(answer or ""),
                     )
+                    # 외부 AI 모델 호출 성공: chat_main.py로 전달될 정상 결과 객체(status="success") 반환
                     return AIResult(
+                        # 성공 상태 플래그 (chat_main.py에서 성공 여부 분기 기준이 됨)
                         status            = "success",
+                        # 요청 추적용 식별자
                         request_id        = request_id,
+                        # 응답 생성에 최종 사용된 모델명
                         model             = model,
+                        # 호출 완료까지 소요된 시간 (ms)
                         latency_ms        = elapsed_ms(),
+                        # 모델이 생성한 텍스트 답변
                         answer            = answer,
+                        # 프롬프트에 소모된 토큰 수
                         prompt_tokens     = getattr(usage, "prompt_token_count", None),
+                        # 응답 생성에 소모된 토큰 수
                         completion_tokens = getattr(usage, "candidates_token_count", None),
+                        # 기본 모델 실패 후 대체(폴백) 모델을 사용했는지 여부
                         fallback_used     = is_fallback,
                     )
 

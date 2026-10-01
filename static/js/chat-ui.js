@@ -1,8 +1,8 @@
 import { openLogin } from './auth-ui.js'
 import { setDrawer, renderHistory, copyText } from './chat-room.js'
 import {
-    chats, activeId, pending, updateInput, render,
-    newChat, deleteChat, selectChat, switchChatOwner, handleSubmit
+    chats, activeId, loading, isProcessing, updateInput, render, loadChat, loadEarlier,
+    newChat, deleteChat, selectChat, switchChatOwner, handleSubmit, stopWaiting, retryChat
 } from './chat-action.js'
 
 const $  = selector => document.querySelector(selector)
@@ -11,9 +11,17 @@ const $$ = selector => document.querySelectorAll(selector)
 // 채팅 입력·대화 선택·복사·삭제·계정 변경 이벤트를 연결한다.
 const bindChatEvents = () => {
     $('.chat-form')  .addEventListener('submit', handleSubmit)
-    $('.stop-button').addEventListener('click', () => pending?.controller.abort())
-    $('.retry')      .addEventListener('click', () => $('.chat-form').requestSubmit())
+    $('.stop-button').addEventListener('click', stopWaiting)
+    $('.retry')      .addEventListener('click', retryChat)
     $('.reauth')     .addEventListener('click', openLogin)
+
+    $('.chat-body').addEventListener('scroll', event => {
+        const pane = event.currentTarget
+        if (pane.scrollTop === 0 && pane.scrollHeight > pane.clientHeight) loadEarlier()
+    })
+    $('.chat-body').addEventListener('wheel', event => {
+        if (event.deltaY < 0 && event.currentTarget.scrollTop === 0) loadEarlier()
+    }, { passive: true })
 
     $('.question').addEventListener('input', () => {
         $('.question').removeAttribute('aria-invalid')
@@ -27,13 +35,13 @@ const bindChatEvents = () => {
 
     $$('[data-new]').forEach(button => button.addEventListener('click', newChat))
     $$('[data-prompt]').forEach(button => button.addEventListener('click', () => {
-        if (pending) return
+        if (isProcessing() || loading) return
         $('.question').value = button.dataset.prompt
         updateInput()
         $('.question').focus()
     }))
 
-    $('.history-search').addEventListener('input', () => renderHistory(chats, activeId, Boolean(pending)))
+    $('.history-search').addEventListener('input', () => renderHistory(chats, activeId, Boolean(loading?.deleting || loading?.refreshRooms)))
     $('.history-list').addEventListener('click', event => {
         const button = event.target.closest('[data-room]')
         if (button) selectChat(button.dataset.room)
@@ -53,3 +61,4 @@ const bindChatEvents = () => {
 
 bindChatEvents()
 render()
+loadChat(activeId, true)

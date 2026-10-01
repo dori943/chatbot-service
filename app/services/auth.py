@@ -28,7 +28,7 @@ def validate_auth(data: AuthRequest):
     if not 3 <= len(data.id) <= 50:       raise APIError(422, ErrorCode.INVALID_INPUT, "아이디는 3~50자로 입력해 주세요.")
     if not data.pw.strip():               raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호를 입력해 주세요.")
     if len(data.pw) < 8:                  raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호는 8자 이상으로 입력해 주세요.")
-    if len(data.pw.encode("utf-8")) > 72: raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호는 UTF-8 기준 72바이트 이내로 입력해 주세요.")
+    if len(data.pw.encode("utf-8")) > 72: raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호가 너무 깁니다. 더 짧게 입력해 주세요.")
 
 
 async def register(data: AuthRequest, db: AsyncSession):

@@ -1,190 +1,157 @@
-# 리팩터링 변경 명세
+# 리팩터링 및 후속 변경 명세
 
 | 항목 | 기준 |
 |---|---|
-| 기준일 | 2026-09-28 |
-| 기능 비교 브랜치 | `develop` — `95396ac458581fdd085322126042eab126998b23` |
-| 구조 기준 브랜치 | `feat/bsg-back/auth` — `c1befcda65995085f9d89cd00b5a036b95103049` |
-| 변경 대상 | `refactor/bsg-back/app-refactoring` 작업 트리 |
+| 갱신일 | 2026-10-02 |
+| 최초 구조 정리의 기능 기준 | develop — 95396ac458581fdd085322126042eab126998b23 |
+| 폴더 책임 분리 기준 | feat/bsg-back/auth — c1befcda65995085f9d89cd00b5a036b95103049 |
+| 현재 변경 비교 기준 | origin/develop — 3b064973138591a4001cd1346c854a3193968e0f |
+| 현재 대상 | fix/bsg-back/issue-fix 및 작업 트리 |
+
+최초 백엔드 구조 정리와 프론트 모듈 분리는 이미 develop에 병합된 변경이다.
+아래에서 공통 구조와 현재 브랜치의 기능 변경을 구분한다.
+API의 전체 요청·응답과 DB 필드는 [README](../README.md), 검증 명령·결과는 [테스트 가이드](testing-guide.md)에 정의한다.
 
 ## 1. 백엔드
 
-### 1.1. 폴더별 책임과 변경 사항
+### 폴더별 책임
 
-| 위치 | 책임 | develop 대비 변경 |
+| 위치 | 책임 | 최초 구조 정리 내용 |
 |---|---|---|
-| `app/routers/` | 경로, 요청 타입, 인증·DB 의존성 선언 및 서비스 호출 | 채팅 검증·AI 호출·저장·응답 구성 로직을 서비스로 이동 |
-| `app/schemas/` | 요청 및 서비스 간 데이터 타입 선언 | 내용 검증을 서비스로 이동. HTTP 응답 모델 제거. `AIResult`를 서비스 간 전달 타입으로 분리 |
-| `app/services/` | 입력 검증, 기능 실행, DB 조회·저장, 외부 AI 호출 | 인증·채팅 흐름·기록 처리·AI 연결 분리. 서비스 내부의 별도 DB 세션 생성 제거 |
-| `app/core/` | 공통 설정, 인증 의존성, 오류 응답, 로그 출력 | AI 설정 이동, 사용자 확인을 인증 서비스로 위임, 예외 핸들러·로그 미들웨어 추가 |
-| `app/models/` | 테이블·컬럼·관계의 ORM 매핑 | DDL에 맞게 `BIGINT`, `VARCHAR`, `DATETIME(6)` 타입 명시. 대화방 식별용 `room_id`, 이름 저장용 `room_name` 추가 |
-| `app/utils/` | bcrypt 해시·검증, JWT 생성 | 연산 로직 유지. 서비스의 동기 bcrypt 호출에 스레드풀 적용 |
-| `app/db.py` | 엔진·세션 팩토리·DB 의존성 | `AsyncSession`·`aiomysql` 적용 |
-| `app/main.py` | 앱 구성 및 수명 주기 | 라우터·예외 핸들러·로그 미들웨어 등록. 앱 종료 시 DB 엔진 해제 |
-| `data/` | DB 최초 초기화 | `init.sql`에 필수 컬럼 `room_id VARCHAR(64)`, `room_name VARCHAR(100)` 추가. 컬럼별 대조 규칙은 지정하지 않고 테이블 기본값 사용 |
+| app/routers/ | URL, 타입, 인증·DB 의존성, 서비스 호출 | 라우터에 있던 검증·AI 호출·저장·응답 구성을 서비스로 이동 |
+| app/schemas/ | 요청과 서비스 간 전달 타입 | 내용 검증을 서비스로 이동. HTTP 응답 모델 대신 dict·list 반환, AIResult 분리 |
+| app/services/ | 기능 실행과 입력 검증, DB 처리, AI 연결 | 인증·채팅 흐름·DB 접근·AI 호출 책임 분리 |
+| app/core/ | 설정·인증 의존성·예외 처리·로그 | 사용자 확인을 인증 서비스에 위임. 공통 오류 핸들러와 요청 로그 구성 |
+| app/models/ | ORM 테이블 매핑 | DDL과 타입 일치, 사용자·방 구분 및 이름 저장 |
+| app/utils/ | 해시·비밀번호 검증·JWT 발급 | bcrypt 실행은 서비스에서 스레드풀로 호출 |
+| app/db.py | 엔진·세션 팩토리·요청별 DB 의존성 | AsyncSession과 aiomysql 적용 |
+| app/main.py | 앱과 수명 주기 구성 | 라우터·핸들러·미들웨어 등록, 종료 시 엔진 해제 |
+| data/ | 최초 DB 정의 | 기존 구조 정리 후 방 ID·이름 컬럼 추가. 이번 브랜치에서는 DDL 변경 없음 |
 
-### 1.2. 서비스 구성
+서비스 내부에서 별도 SessionLocal을 만들지 않는다. 인증 의존성과 라우터가 get_db()를 공유하고,
+서비스에 동일한 AsyncSession을 전달한다. AI_connect에는 DB 세션 대신 조회가 끝난 문맥 목록을 전달한다.
 
-| 모듈 | 주요 함수 | 책임 |
+| 서비스 모듈 | 역할 |
+|---|---|
+| auth.py | 가입·로그인, 입력 검증, 사용자 존재 확인 |
+| chat_main.py | 질문·방·조회 커서 검증, 처리 순서, AI 결과 검증, HTTP 응답 데이터 구성 |
+| chat_db.py | 문맥·방·기록 조회, 질문·결과 저장, 중단된 처리 상태 종료, 방 삭제 |
+| AI_connect.py | 문맥 구성, 비동기 SDK 호출, 재시도·대체 모델, AI 오류 분류 |
+
+### 현재 develop 대비 변경
+
+| 대상 | 기존 develop | 현재 |
 |---|---|---|
-| `app/services/auth.py` | `register()`, `login()`, `check_user()` | 가입·로그인·사용자 존재 확인 |
-| `app/services/chat_main.py` | `chat()`, `get_my_chat()` | 채팅 처리 순서, 내용 검증, HTTP 응답 데이터 구성 |
-| `app/services/chat_db.py` | `save_result()`, `get_list_chat()`, `get_history()` | 대화 기록 저장·목록·문맥 조회 |
-| `app/services/AI_connect.py` | `generate_answer()` | 문맥 구성, SDK 호출, 재시도·폴백, AI 오류 분류 |
+| 로그인 오류 | 입력 조건·인증 실패의 상세 메시지 | 로그인 실패 / 서버 상태 오류의 두 메시지로 통일. 상태·오류 코드는 유지 |
+| 질문 저장 시점 | AI 처리가 끝난 뒤 결과와 함께 저장 | 호출 전 processing 저장·커밋, 완료 시 같은 DB id의 상태·결과 갱신 |
+| 방 목록 | 프론트 저장 목록 중심 | 본인 DB 기록에서 방별 최신 이름과 목록 조회 |
+| 방 기록 조회 | 본인 전체 기록 조회 | 전체 조회 유지, 방 지정 시 5건씩 조회하고 before_id로 이전 기록 조회 |
+| 방 삭제 | 브라우저 목록에서 제거 | 본인의 해당 방 DB 기록 삭제 후 화면 반영. 삭제 이벤트 기록 |
+| 오래된 processing | 해당 상태 없음 | 전체 AI 제한 + 30초 경과 후 본인 기록·목록 조회 시 실패 종료 |
+| 검증 SQL | 성공 이외 상태를 실패로 집계 | processing 별도 집계, error·timeout만 실패에 포함 |
 
-채팅 요청의 처리 순서는 인증 → 방 ID·질문 검증 → 해당 사용자·방의 문맥 조회 → AI 호출 → 결과 검증 → 기록 저장 → 응답 반환이다.
-`AI_connect.py`는 DB 세션을 생성하거나 기록을 저장하지 않는다.
-방 구분은 `chat_db.py`가 수행하며, `AI_connect.py`에는 필터링된 질문·답변 목록을 전달한다.
+DB의 기존 status 문자열 컬럼을 그대로 사용하며 새 테이블·컬럼은 추가하지 않았다.
+요청 ID는 서버 미들웨어가 생성하는 로그 연결 값이다. 중복 POST를 차단하는 멱등성 키로 사용하지 않는다.
 
-### 1.3. 인증 및 DB 세션 수명
+### 요청 흐름과 트랜잭션
 
-`app/core/dependencies.py`의 `get_token_id()`는 Bearer 토큰의 서명·만료·ID를 검증하고
-`app/services/auth.py`의 `check_user()`로 사용자 존재 여부를 조회한다.
-인증 의존성과 라우터는 동일한 요청의 `get_db()` 의존성을 공유한다.
-서비스와 기록 처리 함수는 전달받은 `AsyncSession`을 사용한다.
+인증 → 방·질문 검증 → 해당 사용자·방의 성공 문맥 조회 → processing 질문 저장 →
+AI 호출 → 결과 검증 → 해당 기록 갱신 → 성공 또는 오류 응답 순서로 처리한다.
 
-| 단계 | 세션·트랜잭션 동작 |
+| 단계 | 동작 |
 |---|---|
-| 요청 시작 | `get_db()`에서 세션 생성 |
-| 사용자·문맥·목록 조회 | 조회 완료 후 `commit()` |
-| AI 대기 | 문맥 조회 트랜잭션 종료 상태. DB 연결 점유 없음 |
-| 기록 저장 | `add()` 후 `commit()` |
-| DB 예외 | 해당 서비스에서 `rollback()` |
-| 요청 종료 | `get_db()` 컨텍스트 종료 시 세션 닫기 |
-| 앱 종료 | lifespan에서 `engine.dispose()` |
+| 사용자·문맥·기록 조회 | 필요한 컬럼 조회 후 commit() |
+| 질문 접수 | processing 상태 INSERT 후 commit() |
+| AI 대기 | 조회·질문 저장 트랜잭션 종료 상태. DB 연결 점유 없음 |
+| 결과 저장 | id와 processing 상태 조건으로 UPDATE 후 commit() |
+| DB 예외 | 해당 서비스에서 rollback() |
+| 요청 종료 | get_db() 컨텍스트가 세션을 닫음 |
+| 앱 종료 | lifespan에서 engine.dispose() |
 
-사용자 확인은 ID, 문맥 조회는 질문·답변, 목록 조회는 응답에 필요한 여섯 컬럼만 선택한다.
-문맥은 `user_id + room_id + status=success`로 제한하며, ID 내림차순으로 최근 기록을 조회한 뒤 시간순으로 AI에 전달한다.
-목록은 `created_at DESC, id DESC`로 반환한다.
+삭제되거나 이미 종료된 기록은 결과 저장 시 재생성하지 않으며 CHAT_CLOSED로 응답한다.
+AI 작업 취소는 실패 기록을 저장하고 취소를 전파한다. 서버 강제 종료로 중단된 작업은 재실행하지 않는다.
 
-### 1.4. 검증 및 실패 처리
+### 검증·조회 계약
 
-필수 필드·자료형·JSON 구문 검증은 FastAPI/Pydantic이 수행한다.
-공백·길이·AI 결과 유효성 검증은 서비스에 위치한다. 정의되지 않은 JSON 필드는 무시한다.
-인증된 사용자 ID는 토큰에서 취득한다.
+- 인증 ID는 공백 제거 후 3~50자, 비밀번호는 8자 이상·UTF-8 72바이트 이하이며 가입·로그인에 동일하게 적용한다.
+- 방 ID·이름과 질문은 서비스에서 공백·길이를 검증한다. Pydantic은 필수 필드·타입·JSON 형식을 처리한다.
+- before_id는 방 ID와 함께 사용하는 양의 BIGINT 범위이며 해당 ID 미만의 기록을 조회한다.
+- 방별 조회는 모든 처리 상태를 포함하여 id 역순 최대 5건을 반환한다. 질문·답변 한 쌍이 1건이다.
+- 방 미지정 조회는 기존 본인 전체 기록 배열과 created_at DESC, id DESC 정렬을 유지한다.
+- AI 문맥은 같은 사용자·방의 성공 기록만 기본 5턴 사용한다. 화면의 5건 조회와 별개다.
+- 인증·입력 실패는 채팅 기록을 만들지 않는다. 질문 저장 실패 시 AI를 호출하지 않으며 DB 오류는 503으로 반환한다.
+- 문맥 조회 실패는 롤백·로그 후 빈 문맥으로 진행한다. AI 실패는 질문 기록에 error 또는 timeout으로 저장한다.
 
-| 검증 대상 | 조건 | 실패 결과 |
-|---|---|---|
-| 인증 입력 | 가입·로그인 ID의 앞뒤 공백 제거 후 빈 값 거부·최대 50자 검사. 비밀번호는 공백 입력 거부·UTF-8 최대 72바이트 검사 후 원문 사용. 회원가입에만 ID 최소 3자·비밀번호 최소 8자 적용 | 422 `INVALID_INPUT` |
-| 방 ID | 필수 문자열. 앞뒤 공백 제거 후 1~64자. 비교는 DB 기본 대조 규칙 적용 | 422 `INVALID_INPUT` |
-| 방 이름 | 필수 문자열. 앞뒤 공백 제거 후 1~100자 | 422 `INVALID_INPUT` |
-| 질문 | 앞뒤 공백 제거 후 빈 값 거부, 최대 `min(MAX_QUESTION_LENGTH, 5000)`자 | 422 `INVALID_INPUT` |
-| AI 성공 답변 | 공백이 아닌 문자열, 최대 5,000자 | 실패 기록 저장 후 502 |
-| 중복 가입 | MySQL 중복 키 오류 | 409 `USER_ALREADY_EXISTS` |
-| 로그인·토큰 | 계정 정보 불일치, 토큰 누락·만료·위조, 사용자 없음 | 401 `UNAUTHORIZED` |
-| 인증 설정·저장된 비밀번호 해시 | 서명 키 누락 또는 해시 검증 오류 | 503 `AUTH_UNAVAILABLE` |
-
-| 실패 지점 | 후속 처리 |
-|---|---|
-| 인증·입력 검증 | AI 호출 및 채팅 기록 저장 없이 오류 반환 |
-| 문맥 조회 | 롤백 후 빈 문맥으로 AI 호출 |
-| AI 호출·결과 검증 | `answer=null`인 실패 기록 저장 후 오류 반환 |
-| 기록 저장·목록 조회 | 롤백 후 503 `DB_UNAVAILABLE` 반환 |
-| 처리되지 않은 내부 예외 | 공통 핸들러에서 500 `INTERNAL_ERROR` 반환 |
-
-### 1.5. HTTP 인터페이스 변경
-
-| 항목 | develop 대비 현재 계약 |
-|---|---|
-| 가입·로그인 성공 | 성공 메시지 유지. 로그인 응답의 `token`, `token_type` 유지 |
-| 로그인 실패 | HTTP 200 대신 401 반환 |
-| 채팅 요청·성공 | 요청에 `room_id`, `room_name` 필수. HTTP 200 응답은 `room_id`, `room_name`, `answer`, `request_id`, `created_at`. 시각은 UTC `Z` 문자열 |
-| 본인 기록 조회 | `{items, total}` 대신 전체 배열 반환. 페이지네이션 없음 |
-| 기록 항목 | `id`, `room_id`, `room_name`, `question`, `answer`, `status`, `created_at` |
-| 서비스·검증 오류 | `error_code`, `message`, `request_id`로 통일 |
-| 기본 HTTP 오류 | 404·405 등 프레임워크 응답의 `detail` 형식 유지 |
-| 요청 식별 | `X-Request-ID` 헤더 추가. 오류 응답·로그·채팅 기록에 동일 ID 사용 |
-
-AI 오류의 HTTP 상태는 시간 초과 504, 호출 제한 429, 안전 필터 차단 422, 키·권한 설정 오류 503, 나머지 AI 오류 502이다.
-서비스는 dict·list를 반환하거나 `APIError`를 발생시키며, `app/core/errors.py`의 예외 핸들러가 오류 응답을 구성한다.
-`ChatResponse`, `ChatLogItem`, `ErrorResponse`는 사용하지 않는다.
-
-### 1.6. 로그
-
-로그 레벨·메시지 형식·출력은 `app/core/logging.py`에서 관리한다.
-호출부는 `log_event()`에 이벤트와 값을 전달하며, 요청 ID는 `ContextVar`로 분리한다.
-
-| 요청 이벤트 | 기록 시점·항목 |
-|---|---|
-| `request_received` | 앱 처리 전. 요청 ID와 HTTP 메서드 |
-| `request_completed` | 정상 완료 또는 예외 종료. 요청 ID, 메서드, 라우트, 상태, 처리 시간 |
-| `request_cancelled` | 요청 작업 취소. 요청 ID, 메서드, 라우트, 처리 시간 |
-
-수신 단계는 라우트 매칭 전이므로 원본 경로·쿼리·본문을 기록하지 않는다.
-취소는 호출자에게 전파하며 HTTP 500 완료 로그와 구분한다.
-
-로그 항목은 요청 결과, 처리 시간, AI 모델·시도 횟수, 예외 종류·발생 위치이다.
-질문·답변 본문, 비밀번호, 토큰, 예외 원문은 앱 이벤트 로그에서 제외한다.
-Uvicorn의 예외 로그는 필터에서 예외 종류와 발생 위치로 변환한다.
+내용 검증은 서비스, 오류의 HTTP 변환은 core/errors.py, 로그 형식·출력은 core/logging.py가 담당한다.
+호출부는 log_event()로 이벤트와 필요한 값만 전달한다. 요청 ID는 ContextVar로 동시 요청 간 분리한다.
+앱 이벤트 로그에는 질문·답변 본문, 비밀번호, 토큰, 예외 원문을 남기지 않는다.
 
 ## 2. 프론트엔드
 
-| 위치 | develop 대비 변경 |
-|---|---|
-| `static/js/client.js` | JSON POST 요청, 전달받은 토큰의 Authorization 헤더 구성, 30초 제한·취소, 공통 HTTP 오류 처리 |
-| `static/js/auth-api.js` | 공통 클라이언트로 가입·로그인 요청. 인증 전용 오류 안내와 성공 응답 확인 |
-| `static/js/auth.js` | 인증 오류 메시지 표시. 만료 시각의 타이머·화면 재진입·다른 탭의 토큰 변경에 따라 인증 상태 동기화 |
-| `static/js/chat.js`, `static/js/chat-api.js` | 선택한 방 ID·이름 전송. 제목 생성 시 이모지를 포함한 문자 단위로 첫 30자 사용. 오류의 HTTP 상태 전달 및 401 발생 시 해당 요청의 토큰 정리 |
-| `templates/` | 변경 없음 |
+### 폴더·모듈 책임
 
-대화방 생성·삭제와 화면 기록은 `localStorage`를 사용한다.
-인증·채팅 API의 `fetch` 호출은 `client.js`의 `post()`로 통합한다. API별 모듈은 요청 데이터와 성공 응답을 확인하고,
-공통 클라이언트는 JSON 응답 또는 HTTP 상태·오류 코드·요청 ID가 포함된 오류를 전달한다.
-토큰 조회·로그인 상태·화면 갱신은 `auth.js`에서 관리하며, 채팅은 요청 시작 시 확보한 토큰을 전달한다.
-방 이름은 프론트의 `title`을 `room_name`으로 전송하여 `chat_logs`의 각 기록에 저장하고, 성공 응답과 기록 조회에서 반환한다.
-기록의 `room_name`은 요청 당시 값이다. 방 이름 일괄 변경 및 서버 기록으로 화면을 복원하는 기능은 없다.
-화면은 `/api/me/chats`를 호출하지 않으며 서버에는 대화방 CRUD API가 없다.
-AI 문맥은 사용자·방별 기록 기준이다. 새 방에는 새 ID를 사용하며, 방 재선택·새로고침 후에도 저장된 ID를 유지한다.
-화면에서 방을 삭제하면 브라우저 기록만 삭제된다. DB 기록은 남지만 다른 방의 문맥에는 포함되지 않는다.
-토큰 만료·401 처리 시 `authchange` 이벤트로 사용자 표시와 채팅 화면을 갱신한다.
-이전 요청의 토큰이 현재 저장된 토큰과 다르면 현재 토큰은 삭제하지 않는다. AI 오류인 502·503 응답은 로그인 상태를 유지한다.
+| 위치 | 책임 |
+|---|---|
+| templates/ | 화면 요소·메시지 템플릿 |
+| static/css/ | 화면 배치·상태 표시·반응형 스타일 |
+| static/js/client.js | JSON 통신, 인증 헤더, 30초 제한·취소, 공통 HTTP 오류 |
+| static/js/auth-service.js | 가입·로그인 통신, JWT 내용 읽기·정리 |
+| static/js/auth-ui.js | 인증 폼, 로그인 표시, 만료·로그아웃·계정 변경 이벤트 |
+| static/js/chat-service.js | 질문·방·기록 통신, 조회 기록 병합, 방 메타데이터 저장 |
+| static/js/chat-action.js | 전송·삭제·조회 상태, 이전 페이지, 폴링, 방·계정 전환 |
+| static/js/chat-room.js | 방 목록·메시지 렌더링, 처리 상태 표시, 스크롤 위치 유지 |
+| static/js/chat-ui.js | DOM 이벤트 연결 |
+| static/js/toast.js | 공통 알림 표시와 타이머 |
+
+인증·채팅 fetch는 client.js로 통합한다. 서비스는 데이터와 통신을 담당하고 DOM 변경은 UI·화면 모듈에서 처리한다.
+
+### 현재 develop 대비 변경
+
+방 목록과 대화 기록의 기준을 DB로 전환했다. localStorage에는 JWT와 계정별 방 ID·이름만 유지하며
+기존 형식에 들어 있던 질문·답변은 해당 계정의 목록을 읽을 때 제거한다.
+브라우저 저장 목록 30개 한도는 서버의 전체 방 목록 표시를 제한하지 않는다.
+
+| 동작 | 처리 |
+|---|---|
+| 로그인·새로고침·답변 완료 | 서버 방 목록 갱신 |
+| 방 선택·새로고침 | URL의 room 값으로 선택 방 복원, 최신 5건 조회 |
+| 맨 위로 스크롤 | 마지막으로 읽은 기록보다 작은 ID의 최대 5건 추가 |
+| 과거 기록 추가 | 기존 메시지 앞에 연결하고 읽던 위치 즉시 복원 |
+| 처리 상태 재조회 | 최신 기록과 기존 처리 중 기록 갱신, 펼친 과거 기록 유지 |
+| 새 기록이 여러 건 추가됨 | 갱신 중 생긴 기록의 간격을 이전 페이지 조회로 채워 중복 없이 병합 |
+| 방·계정 전환 | 이전 조회 취소, 늦은 응답의 다른 화면 반영 방지 |
+| 삭제 | DB 삭제 성공 후 목록·메시지 제거, 실패 시 화면 유지 |
+
+현재 방이 처리 중이고 원래 POST를 기다리지 않으면 2초 간격으로 재조회한다.
+대기 중지는 브라우저의 대기·폴링만 멈춘다. 서버에 접수된 처리는 계속되며 방 재선택 시 상태를 복원한다.
+실패 화면은 AI 오류와 서버 오류를 구분한다. 다시 시도는 실패 기록을 보존한 채 새 질문을 전송한다.
+새로고침·통신 오류·방 전환 자체로 POST를 재전송하지 않는다.
+
+회원가입도 발급된 JWT로 즉시 로그인한다. 로그인 화면에는 두 종류의 공개 오류 메시지만 표시한다.
+토큰 만료·401이면 해당 로그인 상태를 정리하며 이전 요청의 토큰과 현재 토큰이 다르면 현재 토큰은 유지한다.
 
 ## 3. AI
 
-### 3.1. 모듈 분리
+최초 구조 정리에서 ai_service.py의 설정은 core/config.py, 결과 타입은 schemas/chat.py,
+질문 검증은 services/chat_main.py, 호출 로직은 services/AI_connect.py로 분리했다.
+문맥 조회와 저장은 chat_db.py에서 수행한다.
 
-| develop의 위치·책임 | 현재 위치 |
+호출 계약은 generate_answer(question, history=None, *, user_id=None, request_id=None) → AIResult이다.
+AI 모듈은 DB와 HTTP 응답을 직접 다루지 않고 전달받은 문맥으로 SDK 요청을 구성한다.
+시간·문맥·출력 제한, 재시도·대체 모델 정책은 기존 develop에 병합된 AI 코드의 동작을 유지한다.
+
+현재 issue-fix 브랜치에서는 AI_connect.py, prompt.py와 환경 변수 이름을 변경하지 않았다.
+화면의 기록 조회 제한은 AI_CONTEXT_TURNS나 문맥 구성 정책에 영향을 주지 않는다.
+
+## 4. 테스트·검증 SQL
+
+| 위치 | 검증 |
 |---|---|
-| `app/services/ai_service.py`: AI 연결·문맥·재시도·폴백 | `app/services/AI_connect.py` |
-| `app/services/ai_service.py`: AI 설정 | `app/core/config.py` |
-| `app/services/ai_service.py`: AI 결과 타입 | `app/schemas/chat.py`의 `AIResult` |
-| `app/services/ai_service.py`: 질문 검증 | `app/services/chat_main.py` |
-| `app/services/prompt.py`: 시스템 프롬프트 | 동일 파일, 내용 변경 없음 |
+| tests/ | 전용 MySQL 기반 API·DB, 모의 AI·로그·비동기, 브라우저, 선택 실행 실제 AI |
+| docker-compose.test.yml | 개발 DB와 분리된 테스트 MySQL |
+| scripts/ai_smoke_test.py | 독립 AI 스모크 |
+| scripts/check_logs.sql | 읽기 전용 DB 구조·대화·상태 집계·실패 추적 |
 
-### 3.2. 호출 계약 및 처리 정책
-
-호출 인터페이스는 `generate_answer(question, history=None, *, user_id=None, request_id=None) -> AIResult`이다.
-입력 검증·DB 저장·HTTP 오류 변환은 호출 서비스의 책임이며 AI 호출 결과는 `AIResult`로 전달한다.
-
-AI에 전달된 문맥의 턴 수·길이 제한, 결과 모델명 처리, 클라이언트 캐시는 develop의 동작을 유지한다.
-재시도·폴백은 기존 대상 오류에 적용하며, 키·권한 설정 오류와 생성 한도 종료는 별도로 분류해 즉시 중단한다.
-AI 처리 로그는 `app/core/logging.py`의 `log_event()`를 사용한다.
-
-| 조건 | 오류·HTTP | 처리 |
-|---|---|---|
-| `AI_API_KEY` 누락·빈 값·공백 | `AI_CONFIG_ERROR` · 503 | SDK 클라이언트 생성·호출 없이 실패 |
-| 공급자 HTTP 401·403 또는 400의 `API_KEY_*` reason·API key 오류 메시지 | `AI_CONFIG_ERROR` · 503 | 첫 오류 후 재시도·폴백 중단 |
-| 응답의 `finish_reason=MAX_TOKENS` | `AI_TOKEN_LIMIT` · 502 | 빈 응답·부분 응답 모두 실패 처리. 재시도·폴백 없음 |
-
-세 경우 모두 `answer=null`인 실패 기록을 저장하고 사용자에게 설정 확인 안내를 반환한다.
-일반 400·404는 기존 `AI_BAD_REQUEST` 분류와 폴백 정책을 유지한다.
-공급자 응답 기준: [Gemini API 오류 명세](https://ai.google.dev/gemini-api/docs/generate-content/api-errors),
-[FinishReason](https://ai.google.dev/api/generate-content#FinishReason).
-
-| 제한 | 적용 위치 |
-|---|---|
-| `AI_TIMEOUT_SECONDS` | AI 모델별 호출 제한 시간 산정 |
-| `AI_TOTAL_TIMEOUT_SECONDS` | AI 내부 잔여 시간 산정 및 `chat_main.py`의 전체 AI 대기 제한 |
-| `AI_CONTEXT_TURNS`, `MAX_CONTEXT_CHARS` | 최근 문맥 선택 및 오래된 대화 제외 |
-
-## 4. 테스트 구성
-
-| 위치 | 구성 |
-|---|---|
-| `tests/` | 전용 MySQL 기반 API·DB 테스트, 모킹 기반 AI·로그·비동기 테스트, 선택 실행 브라우저·실제 AI 테스트 |
-| `docker-compose.test.yml` | 개발 환경과 분리된 MySQL 테스트 컨테이너 |
-| `scripts/ai_smoke_test.py` | 독립 실행형 AI 검증. `basic`, `context`, `timeout`, `validation`, `limit`, `fallback` 인자 |
-| `scripts/check_logs.sql` | 대화 기록 조회·집계 쿼리 |
-
-실행 환경·명령·판정 조건: [테스트 가이드](testing-guide.md).
-API 경로·요청·응답 형식: [README](../README.md).
+5건 조회는 새 질문 삽입 중 페이지 중복·누락, 사용자·방 격리, 잘못된 커서, 마지막 페이지를 확인한다.
+브라우저는 과거 기록 추가·스크롤 위치·조회 실패 후 재시도·처리 상태 갱신 시 과거 기록 유지를 확인한다.
+검증 SQL은 실제 MySQL에서 전체 문장을 실행하여 처리 중·성공·실패 집계와 기록 없는 사용자 집계를 확인한다.

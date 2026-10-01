@@ -27,6 +27,11 @@ async def api_error_handler(request: Request, exc: APIError):
         **exc.body,
         "request_id": getattr(request.state, "request_id", None) or exc.body["request_id"],
     }
+    if request.url.path == "/auth/login":
+        body["message"] = (
+            "로그인에 실패했습니다." if exc.status_code in (400, 401, 403, 422)
+            else "서버 상태가 좋지 않습니다. 잠시 후 다시 시도해 주세요."
+        )
     headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else {}
     if body["request_id"]:
         headers["X-Request-ID"] = body["request_id"]
@@ -77,6 +82,7 @@ class ErrorCode:
     DB_UNAVAILABLE   = "DB_UNAVAILABLE"
     AUTH_UNAVAILABLE = "AUTH_UNAVAILABLE"
     INTERNAL         = "INTERNAL_ERROR"
+    CHAT_CLOSED      = "CHAT_CLOSED"
 
 
 USER_MESSAGES: dict[str, str] = {

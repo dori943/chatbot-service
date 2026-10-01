@@ -1,122 +1,172 @@
-# chatbot-service ( 작성중 )
+# 담다 — 웹 기반 AI 챗봇
 
-FastAPI에서 화면과 API를 함께 제공하는 AI 챗봇입니다. 회원가입·로그인, 질문·답변,
-성공·실패 기록 저장, 본인 기록 조회와 사용자·대화방별 최근 대화 문맥을 제공합니다.
+로그인한 사용자의 질문을 Gemini API에 전달하고, 방별 대화와 처리 상태를 MySQL에 저장한다. 같은 방의 최근 성공 대화를 다음 질문의 문맥으로 사용한다.
 
-- [테스트 가이드](docs/testing-guide.md): MySQL·브라우저·오프라인 AI 검증 실행 방법
-- [develop 대비 리팩터링](docs/refactoring.md): 폴더별 책임과 백엔드·프론트엔드·AI 변경 범위
+- 저장소: [dori943/chatbot-service](https://github.com/dori943/chatbot-service)
+- 상세 문서: [변경 명세](docs/refactoring.md) · [테스트 가이드](docs/testing-guide.md) · [협업 규칙](.github/CONTRIBUTING.md)
 
-## 실행
+## 프로젝트 개요
 
-1. `.env`가 없으면 `.env.example`을 복사합니다. 기존 파일은 유지합니다.
-2. MySQL 설정, `SECRET_KEY`, `AI_API_KEY`를 입력합니다.
-3. 프로젝트 루트에서 실행합니다.
-
-```sh
-docker compose up --build -d --wait
-docker compose ps
-docker compose logs -f backend
-```
-
-화면: <http://127.0.0.1:8000> / API 문서: <http://127.0.0.1:8000/docs>
-
-앱의 DB 호스트는 Compose 서비스 이름인 `db`입니다. `.env`는 Compose가 주입하며,
-일반 앱 실행 시 Python이 직접 읽지 않습니다. 인증 토큰 유효기간은 현재 60분입니다.
-
-`data/init.sql`은 빈 MySQL 데이터 디렉터리를 처음 만들 때만 실행됩니다.
-기존 볼륨은 재빌드·재시작으로 초기화되지 않습니다. 이번 변경은 `chat_logs.room_id`, `room_name` 필수 컬럼을 추가합니다.
-기존 개발 DB를 새 정의로 초기화하려면 아래 명령을 실행합니다. **기존 계정과 대화 기록이 삭제됩니다.**
-
-```sh
-docker compose down --volumes
-docker compose up --build -d --wait
-```
-
-자동 테스트는 개발 DB와 별도인 전용 MySQL을 사용합니다.
-
-## API
-
-| 메서드 | 경로 | 요청·응답 | 인증 |
-|---|---|---|---|
-| POST | `/auth/register` | `{ "id": "...", "pw": "..." }` → 성공 메시지 | 없음 |
-| POST | `/auth/login` | 같은 요청 → `message`, `token`, `token_type` | 없음 |
-| POST | `/api/chat` | `{ "room_id": "...", "room_name": "...", "question": "..." }` → `room_id`, `room_name`, `answer`, `request_id`, `created_at` | Bearer 토큰 |
-| GET | `/api/me/chats` | 본인 전체 기록 배열, 최신순 | Bearer 토큰 |
-
-채팅 인증 헤더는 `Authorization: Bearer <로그인 응답의 token>`입니다.
-사용자 ID는 토큰에서 가져옵니다. 요청에 추가한 `user_id` 등 정의되지 않은 필드는 무시합니다.
-`room_id`는 프론트가 생성한 대화방 ID입니다. 같은 방에서는 같은 값을 보내며 새 방에서는 새 값을 보냅니다.
-서비스에서 앞뒤 공백을 제거한 뒤 1~64자를 허용합니다. 다른 사용자와 같은 방 ID를 보내도 문맥은 공유되지 않습니다.
-방 ID 비교는 DB 기본 대조 규칙을 따릅니다. 현재 Compose 설정에서는 대소문자를 구분하지 않습니다.
-`room_name`은 화면의 방 이름이며 앞뒤 공백 제거 후 1~100자를 허용합니다.
-프론트는 첫 질문의 앞 30자로 제목을 만들고, 같은 방의 후속 요청에도 해당 제목을 보냅니다.
-
-채팅 성공 응답은 HTTP 200입니다.
-
-```json
-{
-  "room_id": "room-example",
-  "room_name": "FastAPI란?",
-  "answer": "FastAPI는 파이썬으로 API를 만드는 프레임워크입니다.",
-  "request_id": "요청별 식별자",
-  "created_at": "2026-09-24T07:00:00Z"
-}
-```
-
-기록 조회는 `[{ "id": 1, "room_id": "room-example", "room_name": "FastAPI란?", "question": "...", "answer": "...", "status": "success", "created_at": "...Z" }]`
-형식입니다. 실패 기록의 `answer`는 `null`입니다. 페이지네이션과 `items`·`total` 래핑은 사용하지 않습니다.
-
-인증·입력 검증·서비스 오류는 다음 형식으로 반환합니다. 같은 요청의 ID는 응답 헤더
-`X-Request-ID`, 서버 로그, 저장된 채팅 기록에 연결됩니다.
-
-```json
-{ "error_code": "UNAUTHORIZED", "message": "로그인이 필요합니다. 다시 로그인해 주세요.", "request_id": "요청별 식별자" }
-```
-
-| HTTP | 대표 오류 |
+| 항목 | 내용 |
 |---|---|
-| 401 | `UNAUTHORIZED`: 로그인 실패, 토큰 누락·만료·위조, 존재하지 않는 사용자 |
-| 409 | `USER_ALREADY_EXISTS`: 중복 회원가입 |
-| 422 | `INVALID_INPUT`: 요청 검증 실패 / `AI_BLOCKED`: AI 차단 |
-| 429 | `AI_RATE_LIMIT`: AI 요청 제한 |
-| 500 | `INTERNAL_ERROR`: 처리하지 못한 내부 오류 |
-| 502 | AI 연결·응답 오류, `AI_ANSWER_TOO_LONG`, `AI_TOKEN_LIMIT`: 생성 한도로 잘린 응답 등 |
-| 503 | `DB_UNAVAILABLE`: DB 실패 / `AUTH_UNAVAILABLE`: 인증 설정·저장된 인증 정보 문제 / `AI_CONFIG_ERROR`: AI 키·권한 설정 문제 |
-| 504 | `AI_TIMEOUT`: AI 응답 시간 초과 |
+| 문제 정의 | 사용자별 기록과 후속 질문의 문맥을 유지하는 AI 채팅 서비스 |
+| 대상 사용자 | 개념 설명, 글 작성, 코드 예시 등을 한국어로 질문하는 사용자 |
+| 핵심 시나리오 | 가입·로그인 → 질문·답변 → 같은 방에서 후속 질문 → 기록 조회·삭제 |
+| 기술 | FastAPI, JavaScript, SQLAlchemy AsyncSession, MySQL 8.0, Gemini API, Docker Compose |
 
-404·405 등 프레임워크가 직접 반환하는 HTTP 오류는 기본 `detail` 형식입니다.
-내용 검증 규칙은 서비스에 있으므로 Swagger 스키마에는 타입 중심으로 표시됩니다.
+질문은 AI 호출 전에 처리 중으로 저장하고 완료 시 같은 기록을 갱신한다. 실패한 질문도 기록에 남는다.
 
-## 현재 동작 범위
+## 시스템 구조
 
-- 질문은 앞뒤 공백을 제거한 뒤 `min(MAX_QUESTION_LENGTH, 5000)`자까지 허용합니다.
-- AI 답변이 비었거나 5,000자를 넘으면 실패 기록을 저장하고 오류를 반환합니다. 답변을 잘라 저장하지 않습니다.
-- 실제 답변 길이는 `AI_MAX_TOKENS`(기본 800, 한국어 기준 대략 400~600자)가 먼저 제한합니다.
-  한도에 걸려 잘린 답변은 저장하지 않고 `AI_TOKEN_LIMIT`으로 반환하므로, 긴 답변이 필요하면 이 값을 올려야 합니다.
-- AI 호출 1회 제한 시간(`AI_TIMEOUT_SECONDS`)의 하한은 10초입니다. 제공사가 그보다 짧은 deadline을
-  400으로 거부하므로, 남은 예산이 10초 미만이면 폴백 모델을 호출하지 않고 건너뜁니다.
-- AI가 `MAX_TOKENS`로 종료하면 부분 답변도 성공으로 반환하지 않습니다. 키 누락·키 인증·권한 오류와 함께 재시도·폴백 없이 실패 기록을 저장하고 설정 확인 안내를 반환합니다.
-- 인증·입력 검증 실패는 AI를 호출하거나 채팅 기록을 만들지 않습니다. DB 저장 실패는 503입니다.
-- DB 시각은 UTC이며 API에서는 `Z`를 붙여 반환합니다.
-- AI 문맥은 **같은 사용자·같은 방의 최근 성공 대화**입니다. 기본 5턴에서 길이에 따라 오래된 대화를 더 제외합니다.
-- 화면의 대화방 생성·삭제는 브라우저 저장소에서 동작합니다. 새 방은 별도 ID로 시작하고, 기존 방을 다시 선택하면 해당 방의 문맥을 사용합니다. 화면에서 방을 삭제해도 DB 기록은 삭제되지 않습니다.
-- 화면은 DB 기록 조회 API와 동기화되지 않습니다. 중지 버튼은 브라우저의 응답 대기를 취소하며 서버 처리 취소까지 보장하지 않습니다.
-- 방 이름은 각 대화 기록에 요청 당시 값으로 저장하고 기록 조회 API에서 반환합니다. 방 이름 변경 API와 서버 기록을 이용한 화면 복원은 구현하지 않았습니다.
-- JWT 만료 또는 채팅 요청의 401 응답 시 토큰을 정리하고 화면을 비로그인 상태로 갱신합니다. AI 오류인 502·503 응답은 로그인 상태를 유지합니다.
-
-## 테스트
-
-기본 pytest는 실제 AI를 호출하지 않습니다. API·DB 테스트는 별도 MySQL 컨테이너를 사용합니다.
-전용 DB를 지정하지 않으면 해당 테스트는 건너뛰므로 [테스트 가이드](docs/testing-guide.md)의 전체 실행 절차를 따르세요.
-
-```sh
-python scripts/ai_smoke_test.py validation limit fallback
-node --test tests/*.test.mjs
+```mermaid
+flowchart LR
+    browser[브라우저: HTML·CSS·JS] -->|HTTP / Bearer JWT| router[FastAPI 라우터·인증 의존성]
+    router --> service[인증·채팅 서비스]
+    service -->|AsyncSession| db[(MySQL: login / chat_logs)]
+    service --> ai[AI_connect: 문맥 구성·호출·재시도]
+    ai -->|서버의 API 키| gemini[Gemini API]
+    service --> log[공통 이벤트 로그]
+    ai --> log
 ```
 
-스모크는 기존 여섯 사례를 직접 실행합니다. 인자 없이 실행하면 API 키가 있는 경우
-실제 AI 호출도 포함하므로, 오프라인 검증에는 위처럼 사례를 지정합니다.
-2026-09-28 검증 결과: 전용 MySQL·Chromium을 포함한 pytest 156개, JS 테스트 11개,
-오프라인 AI 스모크 3개 시나리오가 통과했습니다. 실제 AI 호출 테스트 1개는 제외했으며,
-외부 배포 환경은 이번 검증에 포함하지 않았습니다. 개발용 Compose의 컨테이너·DB 볼륨을
-재생성한 뒤 웹페이지 접속·가입·로그인·방 ID 전송·입력 검증도 확인했습니다.
+| 위치 | 역할 |
+|---|---|
+| templates/, static/ | 화면, 인증·채팅 상태, 서버 통신 |
+| app/routers/, app/core/ | API 경로, 인증, 오류·요청 로그 |
+| app/services/ | 입력 검증·처리 순서, DB 조회·저장, AI 호출·문맥 |
+| app/models/, app/db.py | 테이블 매핑과 요청별 AsyncSession |
+| app/schemas/, app/utils/ | 요청 타입, 비밀번호 해시, JWT 발급 |
+| data/, scripts/, tests/ | 초기 테이블, 확인용 SQL, 자동 테스트 |
+
+AI 키는 서버에서만 사용한다. AI 문맥은 같은 사용자·방의 최근 성공 대화 기본 5건이다.
+
+## 실행 및 배포
+
+.env.example을 .env로 복사해 DB 비밀번호, SECRET_KEY, AI_API_KEY를 설정한 뒤 저장소 루트에서 실행한다.
+
+~~~sh
+cp .env.example .env
+docker compose up --build -d --wait
+~~~
+
+웹 화면: <http://127.0.0.1:8000> · API 문서: <http://127.0.0.1:8000/docs>
+
+외부 배포는 공개 서버에서 같은 명령으로 실행하고 호스트 8000 포트의 접근을 허용한다. HTTPS 사용 시 프록시·도메인·인증서를 설정한다. 외부 접속 URL은 현재 저장소에 등록되지 않았다.
+
+data/init.sql은 DB 볼륨의 최초 생성 시에만 실행된다. 재빌드해도 기존 데이터는 유지된다.
+
+### 환경 변수
+
+실제 키·비밀번호는 .env에만 저장한다. 전체 예시는 [.env.example](.env.example)을 참조한다.
+
+| 키 | 용도·코드 기본값 |
+|---|---|
+| MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD | MySQL DB·계정·비밀번호 |
+| SECRET_KEY | JWT 서명 키 |
+| AI_API_KEY | 서버의 Gemini API 키 |
+| AI_MODEL, AI_FALLBACK_MODEL | 주/대체 모델: gemini-3.8-flash / gemini-3.1-flash-lite |
+| AI_TIMEOUT_SECONDS, AI_TOTAL_TIMEOUT_SECONDS, AI_MAX_RETRIES | 호출/전체 제한 10초/26초, 재시도 1회 |
+| AI_CONTEXT_TURNS, MAX_CONTEXT_CHARS, MAX_QUESTION_LENGTH | 문맥 5턴/6,000자, 질문 최대 5,000자 |
+| AI_MAX_TOKENS, AI_TEMPERATURE, AI_THINKING_LEVEL | 출력 800토큰, 온도 0.7, 추론 단계 low |
+
+예시 파일의 APP_ENV, APP_HOST, APP_PORT, LOG_LEVEL, ACCESS_TOKEN_EXPIRE_MINUTES는 현재 앱에서 읽지 않는다. JWT 유효기간은 코드에서 60분이다.
+
+## API 명세
+
+채팅·기록 API는 Authorization: Bearer <token> 헤더가 필요하다. 사용자 ID는 JWT에서 가져온다.
+
+| 메서드 | 경로 | 동작 |
+|---|---|---|
+| POST | /auth/register, /auth/login | 가입·로그인 후 JWT 발급 |
+| POST | /api/chat | 질문 저장·AI 호출·결과 저장 |
+| GET | /api/me/rooms | 본인 방 목록 |
+| GET | /api/me/chats | 본인 전체 기록, 최신순 |
+| GET | /api/me/chats?room_id=room-example | 해당 방 최근 5건 |
+| GET | /api/me/chats?room_id=room-example&before_id=12 | ID 12보다 이전 기록 최대 5건 |
+| DELETE | /api/me/chats?room_id=room-example | 해당 방 기록 삭제 |
+
+가입·로그인은 같은 요청 형식이다. ID는 공백 제거 후 3~50자, 비밀번호는 8자 이상·UTF-8 72바이트 이하이다.
+
+~~~http
+POST /auth/register
+Content-Type: application/json
+
+{"id":"sample-user","pw":"example-only-password"}
+~~~
+
+~~~json
+{"message":"register success","token":"<JWT>","token_type":"bearer"}
+~~~
+
+로그인 성공은 같은 형식이며 message는 login success다. 가입 성공 시에도 발급 토큰으로 바로 로그인한다.
+
+~~~http
+POST /api/chat
+Authorization: Bearer <JWT>
+Content-Type: application/json
+
+{"room_id":"room-example","room_name":"첫 질문","question":"FastAPI란?"}
+~~~
+
+~~~json
+{"id":12,"room_id":"room-example","room_name":"첫 질문","answer":"Python 웹 프레임워크입니다.","request_id":"예시-ID","created_at":"2026-10-02T01:00:00Z"}
+~~~
+
+방별 기록은 질문·답변 한 쌍이 1건이다. 처리 중·성공·실패를 모두 조회하며, 배열 마지막 ID를 before_id로 보내 이전 5건을 받는다.
+
+~~~json
+[{"id":12,"room_id":"room-example","room_name":"첫 질문","question":"FastAPI란?","answer":"Python 웹 프레임워크입니다.","status":"success","error_code":null,"created_at":"2026-10-02T01:00:00Z"}]
+~~~
+
+방 삭제 성공은 {"deleted":1}, 없는 방은 {"deleted":0}이다. 오류는 HTTP 상태와 함께 다음 형식으로 반환한다.
+
+~~~json
+{"error_code":"AI_TIMEOUT","message":"현재 응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.","request_id":"예시-ID"}
+~~~
+
+## DB 구조
+
+[data/init.sql](data/init.sql)의 login.id와 chat_logs.user_id는 1:N 관계다. 방은 사용자 ID·방 ID로 구분한다.
+
+| 테이블 | 필드 | 타입 | 내용 |
+|---|---|---|---|
+| login | id / pw | VARCHAR(50) PK / VARCHAR(255) | 사용자 ID / bcrypt 해시 |
+| chat_logs | id / user_id | BIGINT PK / VARCHAR(50) FK | 기록 ID / 사용자 ID |
+| chat_logs | room_id / room_name | VARCHAR(64) / VARCHAR(100) | 방 ID / 질문 당시 이름 |
+| chat_logs | question / answer | VARCHAR(5000) / VARCHAR(5000) NULL | 질문 / 성공 답변 |
+| chat_logs | status / error_code | VARCHAR(20) / VARCHAR(50) NULL | 처리 상태 / 실패 원인 |
+| chat_logs | latency_ms / model | INT NULL / VARCHAR(80) NULL | AI 처리 시간 / 모델 |
+| chat_logs | request_id / created_at | VARCHAR(64) / DATETIME(6) | 로그 연결 ID / UTC 생성 시각 |
+
+서버 로그에는 요청 수신, AI 호출·결과, DB 저장 성공·실패가 남는다.
+
+## DB 확인 방법
+
+본인 기록은 로그인 토큰으로 GET /api/me/chats를 호출해 확인한다. 전체·사용자별 집계와 실패 기록은 기존 [검증 SQL](scripts/check_logs.sql)을 사용한다.
+
+~~~sh
+docker compose cp scripts/check_logs.sql db:/tmp/check_logs.sql
+docker compose exec db mysql -u chatbot_user -p
+~~~
+
+MySQL에서 .env의 DB 이름으로 변경해 실행한다.
+
+~~~sql
+USE chatbot_db;
+SOURCE /tmp/check_logs.sql;
+~~~
+
+SQL은 processing을 따로 세고 error·timeout만 실패로 집계한다. DB 기록과 서버 로그는 request_id로 연결한다.
+
+## 팀 구성 및 작업 요약
+
+역할은 [협업 규칙](.github/CONTRIBUTING.md)과 Git 이력을 기준으로 한다.
+
+| 담당자 | 역할·작업 | 대표 커밋 |
+|---|---|---|
+| 채민성 | 프론트엔드: 화면, 인증·채팅 연결, 오류 안내 | [채팅 통신](https://github.com/dori943/chatbot-service/commit/ee6ab55) |
+| 방승규 | 백엔드·구조: 인증, 비동기 DB, 기록·상태 복원, 화면 모듈 분리 | [비동기 DB](https://github.com/dori943/chatbot-service/commit/a380064) |
+| 이건탁 | 백엔드·검증: 채팅 API, 본인 기록 조회, MySQL·브라우저 테스트 | [통합 테스트](https://github.com/dori943/chatbot-service/commit/66a654e) |
+| 김도희 | AI: Gemini 연결, 문맥, 타임아웃, 재시도·폴백 | [AI 파이프라인](https://github.com/dori943/chatbot-service/commit/28d9400) |
+
+기능 브랜치는 PR로 develop에 병합한다([PR 이력](https://github.com/dori943/chatbot-service/pulls)). 실제 .env, 키 파일, 로컬 DB·로그는 [.gitignore](.gitignore)로 제외한다.

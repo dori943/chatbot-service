@@ -195,8 +195,6 @@ input:focus-visible {
   align-items: center;
   text-align: left;
   width: 100%;
-  background: transparent;
-  border: 0;
   border-top: 1px solid var(--line);
   padding: 18px 2px 0;
   gap: 10px
@@ -220,18 +218,6 @@ input:focus-visible {
   font-size: 12px;
   font-weight: 500;
   display: block
-}
-
-.profile small {
-  font-size: 10px;
-  color: var(--muted);
-  display: block
-}
-
-.profile svg {
-  width: 14px;
-  height: 14px;
-  color: var(--muted)
 }
 
 .main {
@@ -406,16 +392,19 @@ h1 em {
   margin: 8px 0
 }
 
-.status[data-state="loading"] {
+.status[data-state="loading"],
+.message[data-state="processing"] .message-text {
   display: flex;
   align-items: center;
   gap: 8px
 }
 
-.status[data-state="loading"]::before {
+.status[data-state="loading"]::before,
+.message[data-state="processing"] .message-text::before {
   content: "";
   width: 12px;
   height: 12px;
+  flex-shrink: 0;
   border: 2px solid var(--line);
   border-top-color: var(--accent);
   border-radius: 50%;

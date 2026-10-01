@@ -11,7 +11,8 @@ SELECT
     (SELECT COUNT(*) FROM login) AS users,
     COUNT(*) AS chats,
     COALESCE(SUM(status = 'success'), 0) AS successes,
-    COALESCE(SUM(status <> 'success'), 0) AS failures,
+    COALESCE(SUM(status = 'processing'), 0) AS processing,
+    COALESCE(SUM(status IN ('error', 'timeout')), 0) AS failures,
     MIN(created_at) AS first_created_at,
     MAX(created_at) AS last_created_at
 FROM chat_logs;
@@ -25,7 +26,8 @@ FROM chat_logs ORDER BY id DESC LIMIT 20;
 -- 사용자별 이용 현황
 SELECT l.id AS user_id, COUNT(c.id) AS chats,
        COALESCE(SUM(c.status = 'success'), 0) AS successes,
-       COALESCE(SUM(c.status <> 'success'), 0) AS failures,
+       COALESCE(SUM(c.status = 'processing'), 0) AS processing,
+       COALESCE(SUM(c.status IN ('error', 'timeout')), 0) AS failures,
        ROUND(AVG(CASE WHEN c.status = 'success' THEN c.latency_ms END)) AS avg_success_ms,
        MAX(c.created_at) AS last_created_at
 FROM login l LEFT JOIN chat_logs c ON c.user_id = l.id
@@ -33,9 +35,9 @@ GROUP BY l.id ORDER BY chats DESC;
 
 -- 실패 요청 추적
 SELECT id, user_id, room_id, created_at, status, error_code, latency_ms, model, request_id
-FROM chat_logs WHERE status <> 'success' ORDER BY id DESC LIMIT 20;
+FROM chat_logs WHERE status IN ('error', 'timeout') ORDER BY id DESC LIMIT 20;
 SELECT error_code, COUNT(*) AS failures
-FROM chat_logs WHERE status <> 'success'
+FROM chat_logs WHERE status IN ('error', 'timeout')
 GROUP BY error_code ORDER BY failures DESC;
 
 -- 최종 성공 모델 분포. 폴백 여부는 DB 컬럼이 없어 서버의 ai_fallback_start 로그로 확인한다.

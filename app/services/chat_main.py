@@ -13,12 +13,14 @@ from app.services           import chat_db, AI_connect
 
 
 async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
-    room_id    = validate_room_id(data)
+    room_id    = validate_room_id(data.room_id)
     room_name  = validate_room_name(data)
     question   = validate_question(data)
     request_id = request_id_context.get() or uuid4().hex
     history    = await chat_db.get_history(user_id, room_id, db)
+    chat_id, created_at = await chat_db.save_question(db, user_id, room_id, room_name, question, request_id)
     started    = time.perf_counter()
+    cancelled  = False
 
     try:
         result = await asyncio.wait_for(
@@ -31,29 +33,26 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
             timeout = config.AI_TOTAL_TIMEOUT_SECONDS,
         )
         if not isinstance(result, AIResult): raise TypeError("Invalid AI result")
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         log_event("chat_ai_failed", exc=exc, request_id=request_id)
+        cancelled = isinstance(exc, asyncio.CancelledError)
         code   = ErrorCode.TIMEOUT if isinstance(exc, TimeoutError) else ErrorCode.UNKNOWN
+        if cancelled: code = ErrorCode.INTERNAL
         result = AIResult(
             status       = "timeout" if code == ErrorCode.TIMEOUT else "error",
             request_id   = request_id,
             model        = config.AI_MODEL,
             latency_ms   = int((time.perf_counter() - started) * 1000),
             error_code   = code,
-            user_message = USER_MESSAGES[code],
+            user_message = USER_MESSAGES.get(code, "서버 오류로 답변을 완료하지 못했습니다."),
         )
 
     result.request_id = request_id
     validate_result(result)
 
-    created_at = await chat_db.save_result(
-        db        = db,
-        user_id   = user_id,
-        room_id   = room_id,
-        room_name = room_name,
-        question  = question,
-        result    = result,
-    )
+    saved = await chat_db.save_result(db, chat_id, result)
+    if cancelled: raise asyncio.CancelledError
+    if not saved: raise APIError(409, ErrorCode.CHAT_CLOSED, "이미 종료되거나 삭제된 대화입니다.")
 
     if result.status != "success":
         raise APIError(
@@ -64,6 +63,7 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
         )
 
     return {
+        "id"         : chat_id,
         "room_id"    : room_id,
         "room_name"  : room_name,
         "answer"     : result.answer,
@@ -72,8 +72,8 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
     }
 
 
-def validate_room_id(data: ChatRequest) -> str:
-    room_id = data.room_id.strip()
+def validate_room_id(room_id: str) -> str:
+    room_id = room_id.strip()
     if not room_id:       raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID를 입력해 주세요.")
     if len(room_id) > 64: raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID는 64자 이내로 입력해 주세요.")
     return room_id
@@ -118,8 +118,12 @@ def validate_result(result: AIResult):
     result.user_message = USER_MESSAGES.get(result.error_code, USER_MESSAGES[ErrorCode.UNKNOWN])
 
 
-async def get_my_chat(user_id: str, db: AsyncSession):
-    rows = await chat_db.get_list_chat(user_id, db)
+async def get_my_chat(user_id: str, db: AsyncSession, room_id: str | None = None, before_id: int | None = None):
+    if room_id is not None:
+        room_id = validate_room_id(room_id)
+    if before_id is not None and (room_id is None or not 1 <= before_id <= 9223372036854775807):
+        raise APIError(422, ErrorCode.INVALID_INPUT, "이전 기록 조회에는 방 ID와 유효한 기록 ID가 필요합니다.")
+    rows = await chat_db.get_list_chat(user_id, db, room_id, before_id)
     return [
         {
             "id"         : row.id,
@@ -128,7 +132,18 @@ async def get_my_chat(user_id: str, db: AsyncSession):
             "question"   : row.question,
             "answer"     : row.answer,
             "status"     : row.status,
+            "error_code" : row.error_code,
             "created_at" : row.created_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
         }
         for row in rows
     ]
+
+
+async def get_my_rooms(user_id: str, db: AsyncSession):
+    rows = await chat_db.get_list_rooms(user_id, db)
+    return [{"room_id": row.room_id, "room_name": row.room_name} for row in rows]
+
+
+async def delete_my_chat(user_id: str, room_id: str, db: AsyncSession):
+    count = await chat_db.delete_room(user_id, validate_room_id(room_id), db)
+    return {"deleted": count}

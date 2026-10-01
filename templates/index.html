@@ -47,16 +47,12 @@
           대화가 여기에 모입니다.
         </p>
       </div>
-      <button class="profile" data-auth>
+      <div class="profile">
         <span class="avatar">G</span>
         <span class="profile-text">
           <strong>게스트</strong>
-          <small>로그인하여 이어가기</small>
         </span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="m9 5 7 7-7 7"/>
-        </svg>
-      </button>
+      </div>
     </aside>
     <main class="main">
       <header class="topbar">
@@ -71,7 +67,7 @@
         </div>
         <div class="top-actions">
           <span id="header-user" class="header-user" hidden></span>
-          <button class="login-button" data-auth>로그인</button>
+          <button class="login-button">로그인</button>
         </div>
       </header>
       <div class="chat-body">
@@ -146,7 +142,7 @@
                 <path d="M12 19V5m-6 6 6-6 6 6"/>
               </svg>
             </button>
-            <button id="stop" type="button" class="stop-button" hidden>중지</button>
+            <button id="stop" type="button" class="stop-button" hidden>대기 중지</button>
           </div>
         </form>
         <div class="chat-feedback">

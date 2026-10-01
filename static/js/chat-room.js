@@ -11,16 +11,18 @@ export const setDrawer = open => {
     if (open) $('.history-search').focus()
 }
 
-// 요청 중 입력과 대화 변경을 잠그고 중지 버튼을 표시한다.
-export const setBusy = busy => {
+// 현재 방의 입력만 잠그고 다른 방으로 이동할 수 있게 한다.
+export const setBusy = (busy, loading = false, paused = false) => {
     $('.send-button').hidden   = busy
-    $('.stop-button').hidden   = !busy
-    $('.question')   .disabled = busy
-    $('.retry')      .disabled = busy
+    $('.send-button').disabled = loading
+    $('.stop-button').hidden   = !busy || paused
+    $('.question')   .disabled = busy || loading
+    $('.retry')      .disabled = busy || loading
 
-    $('.chat-form')  .setAttribute('aria-busy', String(busy))
-    $('.transcript') .setAttribute('aria-busy', String(busy))
-    $$('[data-new], [data-prompt], .delete-chat').forEach(button => button.disabled = busy)
+    $('.chat-form')  .setAttribute('aria-busy', String(busy || loading))
+    $('.transcript') .setAttribute('aria-busy', String(busy || loading))
+    $$('[data-prompt], .delete-chat').forEach(button => button.disabled = busy || loading)
+    $$('[data-new]').forEach(button => button.disabled = loading)
 }
 
 // 처리 상태와 재시도·로그인 안내를 표시한다.
@@ -81,9 +83,13 @@ export const copyText = async article => {
 }
 
 // 선택한 대화의 메시지와 삭제·복사 버튼을 표시한다.
-export const renderChat = current => {
+export const renderChat = (current, quiet = false, prepend = false) => {
     const messages   = current?.messages || []
     const transcript = $('.transcript')
+    const pane       = $('.chat-body')
+    const scrollTop  = pane.scrollTop
+    const oldHeight  = pane.scrollHeight
+    const atBottom   = pane.scrollHeight - scrollTop - pane.clientHeight < 48
 
     $('.welcome')           .hidden      = messages.length > 0
     transcript              .hidden      = !messages.length
@@ -94,12 +100,16 @@ export const renderChat = current => {
     messages.forEach(message => {
         const article = $('.message-template').content.firstElementChild.cloneNode(true)
         article.classList.add(message.role)
+        article.dataset.state = message.status || ''
         article.querySelector('b')            .textContent = message.role === 'user' ? '나' : '담다'
         article.querySelector('.message-text').textContent = message.text
-        article.querySelector('.copy-button') .hidden      = message.role !== 'assistant'
+        article.querySelector('.copy-button') .hidden      = message.role !== 'assistant' || message.status !== 'success'
         transcript.append(article)
     })
 
-    const pane = $('.chat-body')
-    requestAnimationFrame(() => pane.scrollTop = pane.scrollHeight)
+    pane.scrollTo({
+        top: prepend ? scrollTop + pane.scrollHeight - oldHeight
+            : !quiet || atBottom ? pane.scrollHeight : scrollTop,
+        behavior: quiet ? 'instant' : 'auto',
+    })
 }

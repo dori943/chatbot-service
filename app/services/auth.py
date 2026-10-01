@@ -157,6 +157,15 @@ async def login(data: AuthRequest, db: AsyncSession):
         log_event("auth_password_verify_failed", exc=exc)
         # 인증 서비스 오류(HTTP 503) 전파
         raise APIError(503, ErrorCode.AUTH_UNAVAILABLE, "인증 정보를 확인하지 못했습니다.") from None
+    # -------------------------------------------------------------------------
+    # [왜 'if not valid' 검사는 try 블록 밖에 위치하는가? (예외 스코프 최소화)]
+    #   1) try 스코프 최소화 원칙: try 안에는 실제 ValueError 예외를 유발할 수 있는 Bcrypt 연산만 한정 격리
+    #   2) 시스템 결함(503)과 비즈니스 실패(401) 분리:
+    #      - DB 해시 포맷 손상 등 서버 측 결함은 except ValueError에서 503(AUTH_UNAVAILABLE)으로 처리
+    #      - 사용자의 단순 비밀번호 불일치는 정상적인 비즈니스 분기이므로 401(UNAUTHORIZED)로 처리
+    #   3) 예외 마스킹(버그 은닉) 방지: 비즈니스 분기(if not valid)를 try 안에 넣으면 내부 오류 발생 시
+    #      except에 가로채져 401 인증 실패가 엉뚱하게 503 서버 장애로 왜곡되는 버그 원천 예방
+    # -------------------------------------------------------------------------
     # 유저가 존재하지 않거나 비밀번호가 일치하지 않는 경우
     if not valid:
         # 계정 존재 여부를 유출하지 않는 표준 401 미인증 예외 반환 (사용자 열거 공격 방어)

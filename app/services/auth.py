@@ -22,7 +22,9 @@ from app.utils              import security
 # 데이터베이스에 해당 유저 아이디(user_id)가 실존하는지 여부를 반환하는 비동기 함수
 async def check_user(user_id: str, db: AsyncSession) -> bool:
     try:
-        # Login 테이블의 Primary Key(id)만 단일 컬럼으로 스칼라 조회 (인덱스 레인지 스캔 최적화)
+        # [스칼라(Scalar) 조회: db.scalar]
+        # - 2차원 표(행/열 튜플) 포장지를 뜯고 단 하나의 순수한 단일 값(스칼라 값)만 즉시 추출
+        # - Login 테이블의 PK(id) 단일 컬럼만 프로젝션하여 인덱스 스캔 부하를 최소화
         existing_id = await db.scalar(select(Login.id).where(Login.id == user_id))
         # 단순 읽기 쿼리 완료 후 즉시 커밋하여 트랜잭션 종료 및 커넥션 풀 반환
         await db.commit()
@@ -34,7 +36,9 @@ async def check_user(user_id: str, db: AsyncSession) -> bool:
         log_event("auth_user_lookup_failed", exc=exc)
         # 세션 롤백으로 미완료 트랜잭션 정리
         await db.rollback()
-        # 호출자에게 데이터베이스 일시 장애(503) 전파
+        # [예외 전파: raise]
+        # - C#/C++(Unity/Unreal)의 'throw'와 동일하게 비상 상황에서 함수의 정상 흐름을 즉시 중단하고 예외 송출
+        # - 호출자에게 데이터베이스 일시 장애(503) 전파
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "로그인 정보를 확인하지 못했습니다.") from None
 
 
@@ -161,8 +165,18 @@ async def login(data: AuthRequest, db: AsyncSession):
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "로그인 정보를 확인하지 못했습니다.") from None
 
     try:
-        # 1) user is not None: 사용자가 없으면 뒤의 해시 검증을 실행하지 않고 즉시 False (단락 평가)
-        # 2) run_in_threadpool: CPU 집약적인 Bcrypt 패스워드 검증을 스레드풀로 오프로딩하여 이벤트 루프 보호
+        # [단락 평가(Short-Circuit)와 CPU 오프로딩의 결합 구조]
+        # 1) 단락 평가 (user is not None and ...):
+        #    - A and B에서 앞선 조건(user is not None)이 False(유저 부재)이면,
+        #      컴퓨터는 뒤의 연산을 아예 쳐다보지도 않고 즉시 False로 단락 종료 (0.0001초 컷)
+        #    - DB에 없는 사용자일 때 무거운 비밀번호 대조 작업을 실행조차 하지 않아 CPU 낭비 원천 방어
+        # 2) run_in_threadpool (CPU 블로킹 방어 / 스레드풀 외주):
+        #    - Bcrypt는 연산 비용이 극도로 높은 CPU-bound 작업으로, 단일 스레드 비동기 루프에서 돌리면
+        #      수백 ms 동안 전체 서버가 멈추는 이벤트 루프 렉(Starvation) 발생
+        #    - Starlette의 run_in_threadpool로 별도 OS 워커 스레드풀에 외주를 주어 메인 루프 논블로킹 보장
+        # 3) valid 판정:
+        #    - 유저 실존 + 비밀번호 일치 ➔ True (로그인 승인 진행)
+        #    - 유저 부재 or 비밀번호 불일치 ➔ False (401 비상벨 raise 트리거)
         valid = user is not None and await run_in_threadpool(verify_password, data.pw, user.pw)
     # DB에 저장된 패스워드 해시 문자열 형식이 깨져있거나 변조된 경우의 예외 처리
     except ValueError as exc:

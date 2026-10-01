@@ -226,3 +226,172 @@ def test_ai_setting_errors_keep_login_and_save_failure(browser_page, database, m
     with database() as db:
         row = db.query(ChatLog).one()
         assert (row.status, row.error_code, row.answer) == ("error", code, None)
+
+
+@pytest.mark.parametrize("mode", ["login", "signup"])
+def test_auth_form_uses_same_limits(browser_page, mode):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    requests = []
+    user_id = "🙂" * 50
+    page.route("**/auth/*", lambda route: route.fulfill(json={"token": security.create_token(user_id)}))
+    page.on("request", lambda request: requests.append(request) if "/auth/" in request.url else None)
+    page.locator(".login-button").click()
+    page.locator(f'[data-tab="{mode}"]').click()
+    if mode == "signup":
+        page.locator(".auth-confirm").fill("test-only-123")
+
+    for name, password, message in [
+        ("ab", "test-only-123", "3~50자"),
+        ("🙂🙂", "test-only-123", "3~50자"),
+        ("a" * 51, "test-only-123", "3~50자"),
+        ("valid-id", "1234567", "8자 이상"),
+        ("valid-id", "🙂" * 7, "8자 이상"),
+        ("valid-id", " " * 8, "비밀번호를 입력"),
+        ("valid-id", "가" * 25, "72바이트"),
+    ]:
+        page.locator(".auth-name").fill(name)
+        page.locator(".auth-password").fill(password)
+        page.locator(".auth-submit").click()
+        expect(page.locator(".auth-status")).to_contain_text(message)
+    assert not requests
+
+    page.locator(".auth-name").fill(f" {user_id} ")
+    page.locator(".auth-password").fill("가" * 24)
+    if mode == "signup":
+        page.locator(".auth-confirm").fill("가" * 24)
+    page.locator(".auth-submit").click()
+    expect(page.locator(".header-user")).to_have_text(user_id)
+    expect(page.locator(".auth-dialog")).not_to_be_visible()
+    assert len(requests) == 1
+    assert requests[0].url.endswith("/auth/register" if mode == "signup" else "/auth/login")
+    assert requests[0].post_data_json == {"id": user_id, "pw": "가" * 24}
+
+
+def test_signup_auto_login_validation_and_reload(browser_page, database):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    requests = []
+    page.on("request", lambda request: requests.append(request) if "/auth/" in request.url else None)
+    page.locator(".login-button").click()
+    page.locator('[data-tab="signup"]').click()
+    page.locator(".auth-name").fill("ab")
+    page.locator(".auth-password").fill("short")
+    page.locator(".auth-confirm").fill("short")
+    page.locator(".auth-submit").click()
+    expect(page.locator(".auth-status")).to_contain_text("3~50자")
+    page.locator(".auth-name").fill("새사용자")
+    page.locator(".auth-submit").click()
+    expect(page.locator(".auth-status")).to_contain_text("8자 이상")
+    page.locator(".auth-password").fill("test-only-123")
+    page.locator(".auth-submit").click()
+    expect(page.locator(".auth-status")).to_contain_text("서로 다릅니다")
+    assert not requests
+
+    page.locator(".auth-name").fill(" 새사용자 ")
+    page.locator(".auth-confirm").fill("test-only-123")
+    with page.expect_response("**/auth/register") as response:
+        page.locator(".auth-submit").click()
+    assert response.value.status == 200
+    expect(page.locator(".header-user")).to_have_text("새사용자")
+    expect(page.locator(".auth-dialog")).not_to_be_visible()
+    assert page.evaluate("localStorage.getItem('access_token')") == response.value.json()["token"]
+    assert len(requests) == 1
+    assert requests[0].url.endswith("/auth/register")
+    page.reload()
+    expect(page.locator(".header-user")).to_have_text("새사용자")
+    with database() as db:
+        assert security.verify_password("test-only-123", db.get(Login, "새사용자").pw)
+
+    page.locator(".login-button").click()
+    expect(page.locator(".header-user")).to_be_hidden()
+    page.locator(".login-button").click()
+    expect(page.locator(".auth-name")).to_have_value("")
+    expect(page.locator(".auth-password")).to_have_value("")
+    page.locator(".auth-name").fill("새사용자")
+    page.locator(".auth-password").fill("wrong-password")
+    with page.expect_response("**/auth/login") as response:
+        page.locator(".auth-submit").click()
+    assert response.value.status == 401
+    expect(page.locator(".auth-status")).to_contain_text("비밀번호")
+    expect(page.locator(".auth-submit")).to_be_enabled()
+    page.locator(".auth-password").fill("test-only-123")
+    page.locator(".auth-submit").click()
+    expect(page.locator(".header-user")).to_have_text("새사용자")
+    expect(page.locator(".auth-dialog")).not_to_be_visible()
+    page.reload()
+    expect(page.locator(".header-user")).to_have_text("새사용자")
+    page.locator(".login-button").click()
+    expect(page.locator(".header-user")).to_be_hidden()
+    assert page.evaluate("localStorage.getItem('access_token')") is None
+
+
+@pytest.mark.parametrize("action", ["close", "account-change"])
+def test_pending_login_is_cancelled_on_close_or_account_change(browser_page, action):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.route("**/auth/login", lambda route: None)
+    page.locator(".login-button").click()
+    page.locator(".auth-name").fill("alice")
+    page.locator(".auth-password").fill("test-only-123")
+    with page.expect_request("**/auth/login"):
+        page.locator(".auth-submit").click()
+    expect(page.locator(".auth-submit")).to_be_disabled()
+
+    with page.expect_event("requestfailed", predicate=lambda request: "/auth/login" in request.url):
+        if action == "close":
+            page.locator("[data-close]").click()
+        else:
+            set_browser_token(page, security.create_token("bob"))
+    if action == "close":
+        assert page.evaluate("localStorage.getItem('access_token')") is None
+        page.locator(".login-button").click()
+        expect(page.locator(".auth-status")).to_have_text("")
+    else:
+        expect(page.locator(".header-user")).to_have_text("bob")
+    expect(page.locator(".auth-submit")).to_be_enabled()
+
+
+def test_auth_storage_failures_show_error_without_retaining_login(browser_page):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    token = security.create_token("alice")
+    page.route("**/auth/login", lambda route: route.fulfill(json={"token": token}))
+    page.evaluate("""() => {
+        const original = Storage.prototype.setItem;
+        Storage.prototype.setItem = function(key, value) {
+            if (key === 'access_token') throw new Error('blocked');
+            return original.call(this, key, value);
+        };
+    }""")
+    page.locator(".login-button").click()
+    page.locator(".auth-name").fill("alice")
+    page.locator(".auth-password").fill("test-only-123")
+    page.locator(".auth-submit").click()
+    expect(page.locator(".auth-status")).to_contain_text("로그인 정보를 저장하지 못했습니다")
+    expect(page.locator(".auth-submit")).to_be_enabled()
+    expect(page.locator(".header-user")).to_be_hidden()
+    assert page.evaluate("localStorage.getItem('access_token')") is None
+
+    page.reload()
+    set_browser_token(page, token)
+    page.evaluate("""() => {
+        Storage.prototype.removeItem = () => { throw new Error('blocked'); };
+    }""")
+    page.locator(".login-button").click()
+    expect(page.locator(".header-user")).to_be_hidden()
+    expect(page.locator(".toast")).to_contain_text("로그인 정보를 삭제하지 못했습니다")
+    assert page.evaluate("localStorage.getItem('access_token')") == token
+    page.locator("#question").fill("로그아웃 후 질문")
+    page.locator("#send").click()
+    expect(page.locator("#status")).to_contain_text("로그인")
+    page.locator(".login-button").click()
+    page.locator(".auth-name").fill("alice")
+    page.locator(".auth-password").fill("test-only-123")
+    page.locator(".auth-submit").click()
+    expect(page.locator(".header-user")).to_have_text("alice")
+    expect(page.locator(".auth-dialog")).not_to_be_visible()

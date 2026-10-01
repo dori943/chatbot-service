@@ -1,4 +1,4 @@
-import { getAccessToken, getAuthenticatedId, clearAuth, openLogin } from './auth.js';
+import { auth, syncAuthState, clearAuth, openLogin } from './auth-ui.js';
 import { requestReply } from './chat-api.js';
 
 const MAX_QUESTION_LENGTH = 5000;
@@ -12,7 +12,7 @@ function getElement(id) {
 const brand = '담다';
 const guestStorageKey = 'damda-chat-v1';
 const storageKeyFor = id => id ? `${guestStorageKey}:user:${encodeURIComponent(id)}` : guestStorageKey;
-let ownerId = getAuthenticatedId();
+let ownerId = auth?.id ?? null;
 let storageKey = storageKeyFor(ownerId);
 let draft = null;
 let chats = [];
@@ -256,7 +256,8 @@ function switchChatOwner(id, reason) {
 async function handleSubmit(event) {
   event.preventDefault();
   if (pending) return;
-  if (!getAuthenticatedId()) {
+  syncAuthState();
+  if (!auth) {
     clearAuth();
     setStatus('로그인 후 질문을 보내 주세요.', 'error', { login: true });
     return;
@@ -284,7 +285,7 @@ async function handleSubmit(event) {
     activeId = current.id;
   }
   const controller = new AbortController();
-  const token = getAccessToken();
+  const token = auth.token;
   const requestStorageKey = storageKey;
   pending = controller;
   current.messages.push({
@@ -323,9 +324,9 @@ async function handleSubmit(event) {
       cancelled ? '응답 대기를 중지했어요. 입력한 질문은 남겨두었습니다.'
         : (error.message || '응답을 받지 못했어요. 다시 시도해 주세요.'),
       cancelled ? 'info' : 'error',
-      { requestId: error.requestId, retry: !unauthorized && ['AI_TIMEOUT', 'CLIENT_TIMEOUT'].includes(code), login: unauthorized && !getAuthenticatedId() }
+      { requestId: error.requestId, retry: !unauthorized && ['AI_TIMEOUT', 'CLIENT_TIMEOUT'].includes(code), login: unauthorized && !auth }
     );
-    if (unauthorized && !getAuthenticatedId()) openLogin();
+    if (unauthorized && !auth) openLogin();
     if (code === 'INVALID_INPUT') getElement('question').setAttribute('aria-invalid', 'true');
   } finally {
     if (pending === controller) {

@@ -107,7 +107,7 @@ docker compose up --build -d --wait
 
 ```sh
 python scripts/ai_smoke_test.py validation limit fallback
-node --test tests/chat-api.test.mjs
+node --test tests/*.test.mjs
 ```
 
 스모크는 기존 여섯 사례를 직접 실행합니다. 인자 없이 실행하면 API 키가 있는 경우

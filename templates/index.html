@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/style.css">
     <script type="module" src="/static/js/chat.js"></script>
-    <script type="module" src="/static/js/auth.js"></script>
+    <script type="module" src="/static/js/auth-ui.js"></script>
   </head>
   <body data-design="damda">
     <button class="scrim" id="scrim" aria-label="대화 목록 닫기" hidden></button>
@@ -70,7 +70,7 @@
           <span>일상에 더해지는 또 하나의 관점</span>
         </div>
         <div class="top-actions">
-          <span id="header-user" hidden></span>
+          <span id="header-user" class="header-user" hidden></span>
           <button class="login-button" data-auth>로그인</button>
         </div>
       </header>
@@ -158,31 +158,31 @@
         <p class="disclaimer">AI의 답변은 틀릴 수 있습니다. 중요한 정보는 다시 확인하세요.<br>기본 설정에서는 최근 5턴의 대화를 참고합니다. 오래된 내용은 질문에 다시 적어 주세요.</p>
       </div>
     </main>
-    <dialog id="auth-dialog">
+    <dialog id="auth-dialog" class="auth-dialog">
       <button class="modal-close icon-button" data-close aria-label="닫기">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="m6 6 12 12M18 6 6 18"/>
         </svg>
       </button>
       <span class="modal-mark">✳</span>
-      <h2 id="auth-title">다시 만나 반가워요.</h2>
+      <h2 id="auth-title" class="auth-title">다시 만나 반가워요.</h2>
       <p class="modal-intro">대화를 이어갈 나만의 공간.</p>
       <div class="auth-tabs">
         <button type="button" data-tab="login" class="active">로그인</button>
         <button type="button" data-tab="signup">회원가입</button>
       </div>
-      <form id="auth-form">
+      <form id="auth-form" class="auth-form">
         <label for="auth-name">아이디</label>
-        <input id="auth-name" autocomplete="username" placeholder="아이디를 입력하세요" required>
+        <input id="auth-name" class="auth-name" autocomplete="username" placeholder="아이디를 입력하세요" required>
         <label for="auth-password">비밀번호</label>
-        <input id="auth-password" type="password" autocomplete="current-password" placeholder="비밀번호를 입력하세요" required>
-        <div id="confirm-wrap" hidden>
+        <input id="auth-password" class="auth-password" type="password" autocomplete="current-password" placeholder="비밀번호를 입력하세요" required>
+        <div id="confirm-wrap" class="confirm-wrap" hidden>
           <label for="auth-confirm">비밀번호 확인</label>
-          <input id="auth-confirm" type="password" autocomplete="new-password" placeholder="비밀번호를 한 번 더 입력하세요">
+          <input id="auth-confirm" class="auth-confirm" type="password" autocomplete="new-password" placeholder="비밀번호를 한 번 더 입력하세요">
         </div>
         <button class="auth-submit" type="submit">로그인</button>
       </form>
-      <p id="auth-status" role="status"></p>
+      <p id="auth-status" class="auth-status" role="status"></p>
     </dialog>
     <div id="toast" class="toast" role="status" hidden></div>
   </body>

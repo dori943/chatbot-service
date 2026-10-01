@@ -345,13 +345,26 @@ async def _call_once(
 
 # ==============================================================================
 # [최상위 오케스트레이터: generate_answer]
-# 서비스 계층(chat_main.py)이 호출하는 AI 서비스의 메인 엔트리포인트 함수
-# 1) 후보군 등록: 주 모델(AI_MODEL) 및 보조 폴백 모델(AI_FALLBACK_MODEL)을 후보 리스트로 관리
-# 2) 시간 예산(Budget): 전체 제한시간(AI_TOTAL_TIMEOUT_SECONDS) 내에서 남은 가용 시간을 실시간 계산
-# 3) 2중 중첩 루프: [외부] 모델 교체 루프(candidates) ➔ [내부] 동일 모델 재시도 루프(AI_MAX_RETRIES)
-# 4) 지수 백오프(Backoff): 재시도 간격(0.5s * attempt)을 점진적으로 늘려 외부 서버 부하 경감
-# 5) 지능형 탈출: 재시도 가능 에러(RETRY_SAME_MODEL) 및 폴백 가능 에러(FALLBACK_TRIGGERS)를 엄격히 감별
-# 6) 무장애 방어: 어떤 실패가 발생해도 서버를 죽이지 않고 AIResult(status='timeout'|'error') 반환
+# 서비스 계층(chat_main.py)이 호출하는 AI 서비스의 '메인 엔트리포인트(Main Entry Point, 공식 정문)' 함수
+#
+# ■ 메인 엔트리포인트(Main Entry Point)란?
+#   - 외부(chat_main.py)에서 이 파일(AI_connect.py)의 기능을 이용할 때 통과해야 하는 '유일한 공식 대문(Public API)'
+#   - 비유: 자동차 본넷 속의 피스톤, 냉각수 펌프 등 복잡한 내부 부품을 운전자가 직접 만지지 않고,
+#           오직 운전석의 '시동 버튼' 하나만 누르면 모든 부품이 알아서 순서대로 연동되는 것과 같은 원리
+#
+# ■ 언더스코어(_) 비공개 부품 함수들의 캡슐화(Encapsulation):
+#   - 파일 내의 _client(), _build_config(), _call_once(), _extract_answer() 등 앞에 '_'가 붙은 함수들은
+#     파이썬 관례상 '외부에서 직접 호출하지 말고 내부 조립용으로만 사용하라'는 비공개(Private) 부품들임
+#   - 외부(chat_main.py)는 이 세부 부품들을 전혀 몰라도 되며, 오직 대문인 generate_answer() 하나만 호출하면
+#     내부에서 프롬프트 조립 ➔ 설정 생성 ➔ API 통신 ➔ 재시도/폴백 ➔ 결과 포장까지 원스톱으로 처리됨
+#
+# ■ 6대 내결함성(Fault Tolerance) 핵심 파이프라인:
+#   1) 후보군 등록: 주 모델(AI_MODEL) 및 보조 폴백 모델(AI_FALLBACK_MODEL)을 후보 리스트로 관리
+#   2) 시간 예산(Budget): 전체 제한시간(AI_TOTAL_TIMEOUT_SECONDS) 내에서 남은 가용 시간을 실시간 계산
+#   3) 2중 중첩 루프: [외부] 모델 교체 루프(candidates) ➔ [내부] 동일 모델 재시도 루프(AI_MAX_RETRIES)
+#   4) 지수 백오프(Backoff): 재시도 간격(0.5s * attempt)을 점진적으로 늘려 외부 서버 부하 경감
+#   5) 지능형 탈출: 재시도 가능 에러(RETRY_SAME_MODEL) 및 폴백 가능 에러(FALLBACK_TRIGGERS)를 엄격히 감별
+#   6) 무장애 방어: 어떤 실패가 발생해도 서버를 죽이지 않고 AIResult(status='timeout'|'error') 반환
 # ==============================================================================
 # 외부 LLM 모델에 질문을 전송하고 답변 또는 장애 대체 객체(AIResult)를 반환하는 비동기 메인 함수
 async def generate_answer(

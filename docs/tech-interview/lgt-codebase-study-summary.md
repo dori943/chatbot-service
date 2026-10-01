@@ -57,6 +57,9 @@
 - **설정 빌더 및 2중 타임아웃 방어 (`_build_config` & `_call_once`)**:
   - `_build_config`: `temperature`, `max_output_tokens`, 초 ➔ ms 변환 `http_options`, 불필요한 왕복 지연을 막는 `automatic_function_calling(disable=True)`, 구버전 SDK 대응 다운그레이드 폴백(`try ... except TypeError`) 적용.
   - `_call_once`: SDK 내부 소켓 타임아웃뿐만 아니라 파이썬 이벤트 루프 레벨의 `asyncio.wait_for`를 결합한 **2중 타임아웃 방어막**으로 서버 행(Hang) 현상 원천 차단.
+- **메인 엔트리포인트(Main Entry Point) 및 비공개 함수 캡슐화 설계**:
+  - **엔트리포인트의 정의**: 외부(`chat_main.py`)에서 해당 모듈의 기능을 사용할 때 통과하는 유일한 '공식 대문(Public Interface)'. 자동차 본넷 속 복잡한 부품을 건드리지 않고 운전석의 '시동 버튼' 하나만 누르는 것과 동일.
+  - **언더스코어(`_`) 함수의 캡슐화**: `_client`, `_build_config`, `_call_once`, `_extract_answer` 등 앞에 `_`가 붙은 함수들은 파이썬 관례상 내부 조립용 비공개(Private) 부품으로 은닉하여 외부 결합도를 최소화(퍼사드 패턴 적용).
 - **최상위 오케스트레이터 (`generate_answer`) 의 6대 내결함성(Fault Tolerance) 메커니즘**:
   1. **후보군 등록 (`candidates`)**: 주 모델(`AI_MODEL`)과 보조 모델(`AI_FALLBACK_MODEL`)을 순차 배열로 패키징.
   2. **시간 예산(`budget`) 동적 제어**: 전체 제한시간(`AI_TOTAL_TIMEOUT_SECONDS`)에서 소요 시간을 뺀 `remaining()`을 실시간 계산하고, 폴백 시도 잔여 시간이 `MIN_FALLBACK_BUDGET_SECONDS` 미만이면 무리한 호출 없이 조기 종료(Fast Fail).

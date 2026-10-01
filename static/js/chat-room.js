@@ -83,11 +83,12 @@ export const copyText = async article => {
 }
 
 // 선택한 대화의 메시지와 삭제·복사 버튼을 표시한다.
-export const renderChat = (current, quiet = false) => {
+export const renderChat = (current, quiet = false, prepend = false) => {
     const messages   = current?.messages || []
     const transcript = $('.transcript')
     const pane       = $('.chat-body')
     const scrollTop  = pane.scrollTop
+    const oldHeight  = pane.scrollHeight
     const atBottom   = pane.scrollHeight - scrollTop - pane.clientHeight < 48
 
     $('.welcome')           .hidden      = messages.length > 0
@@ -106,5 +107,9 @@ export const renderChat = (current, quiet = false) => {
         transcript.append(article)
     })
 
-    requestAnimationFrame(() => pane.scrollTop = !quiet || atBottom ? pane.scrollHeight : scrollTop)
+    pane.scrollTo({
+        top: prepend ? scrollTop + pane.scrollHeight - oldHeight
+            : !quiet || atBottom ? pane.scrollHeight : scrollTop,
+        behavior: quiet ? 'instant' : 'auto',
+    })
 }

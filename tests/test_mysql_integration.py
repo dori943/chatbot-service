@@ -1,5 +1,6 @@
 """API 테스트와 같은 전용 MySQL fixture로 실제 DDL 제약을 확인한다."""
 from datetime           import datetime
+from pathlib            import Path
 from uuid               import uuid4
 
 import pytest
@@ -65,3 +66,26 @@ def test_mysql_rejects_chat_for_missing_user(database):
             db.flush()
         db.rollback()
         assert db.query(ChatLog).count() == 0
+
+
+def test_verification_sql_separates_processing_from_failures(database):
+    with database() as db:
+        for status in ("success", "processing", "error", "timeout"):
+            db.add(ChatLog(user_id="alice", room_id="room-a", room_name="Room", question="question",
+                           status=status, error_code="AI_TIMEOUT" if status == "timeout" else None,
+                           request_id=uuid4().hex, created_at=datetime.now()))
+        db.commit()
+
+    script = Path("scripts/check_logs.sql").read_text(encoding="utf-8")
+    with database.kw["bind"].connect() as connection:
+        results = [connection.exec_driver_sql(statement).mappings().all()
+                   for statement in script.split(";") if statement.strip()]
+    overall = next(rows[0] for rows in results if rows and "users" in rows[0])
+    assert (overall["chats"], overall["successes"], overall["processing"], overall["failures"]) == (4, 1, 1, 2)
+    users = next(rows for rows in results if rows and "avg_success_ms" in rows[0])
+    alice = next(row for row in users if row["user_id"] == "alice")
+    bob = next(row for row in users if row["user_id"] == "bob")
+    assert (alice["processing"], alice["failures"]) == (1, 2)
+    assert (bob["chats"], bob["processing"], bob["failures"]) == (0, 0, 0)
+    failures = next(rows for rows in results if rows and "status" in rows[0] and "answer" not in rows[0])
+    assert {row["status"] for row in failures} == {"error", "timeout"}

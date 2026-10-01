@@ -207,6 +207,85 @@ def seed_rooms(database, rooms, user_id="alice"):
         db.commit()
 
 
+@pytest.mark.parametrize("height", [720, 6000])
+def test_history_loads_five_turns_at_a_time_and_preserves_scroll(browser_page, database, height):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.set_viewport_size({"width": 1280, "height": height})
+    seed_rooms(database, [{"id": "paged", "title": "Paged", "question": f"question-{index}"} for index in range(12)])
+    set_browser_token(page, security.create_token("alice"))
+    page.locator('[data-room="paged"]').click()
+    expect(page.locator(".message.assistant")).to_have_count(5)
+    expect(page.locator(".question")).to_be_enabled()
+    assert page.locator(".message.user .message-text").all_text_contents() == [f"question-{index}" for index in range(7, 12)]
+
+    anchor = page.locator(".message.user").first.evaluate("""node => {
+        document.querySelector('.chat-body').scrollTo({ top: 0, behavior: 'instant' });
+        return node.getBoundingClientRect().top;
+    }""")
+    page.locator(".chat-body").dispatch_event("wheel", {"deltaY": -100})
+    expect(page.locator(".message.assistant")).to_have_count(10)
+    expect(page.locator(".question")).to_be_enabled()
+    if height == 720:
+        position = page.locator(".message.user").filter(has_text="question-7").evaluate("node => node.getBoundingClientRect().top")
+        assert abs(position - anchor) < 2
+    page.locator(".chat-body").evaluate("pane => pane.scrollTop = 0")
+    page.locator(".chat-body").dispatch_event("wheel", {"deltaY": -100})
+    expect(page.locator(".message.assistant")).to_have_count(12)
+    assert page.locator(".message.user .message-text").all_text_contents() == [f"question-{index}" for index in range(12)]
+
+    requests = []
+    page.on("request", lambda request: requests.append(request) if "before_id=" in request.url else None)
+    page.locator(".chat-body").evaluate("pane => pane.scrollTop = 0")
+    page.locator(".chat-body").dispatch_event("wheel", {"deltaY": -100})
+    page.locator('[data-room="paged"]').click()
+    expect(page.locator(".message.assistant")).to_have_count(5)
+    assert not requests
+    assert "question-" not in page.evaluate("localStorage.getItem('damda-chat-v1:user:alice')")
+
+
+def test_history_page_failure_can_retry_without_clearing_current_messages(browser_page, database):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    seed_rooms(database, [{"id": "paged", "title": "Paged", "question": f"question-{index}"} for index in range(8)])
+    set_browser_token(page, security.create_token("alice"))
+    page.locator('[data-room="paged"]').click()
+    expect(page.locator(".message.assistant")).to_have_count(5)
+    page.route("**/api/me/chats?*before_id=*", lambda route: route.fulfill(status=503, json={"message": "조회 실패"}))
+    page.locator(".chat-body").evaluate("pane => pane.scrollTop = 0")
+    expect(page.locator(".status")).to_have_text("조회 실패")
+    expect(page.locator(".message.assistant")).to_have_count(5)
+    page.unroute("**/api/me/chats?*before_id=*")
+    page.locator(".chat-body").dispatch_event("wheel", {"deltaY": -100})
+    expect(page.locator(".message.assistant")).to_have_count(8)
+
+
+def test_processing_refresh_keeps_expanded_history(browser_page, database, slow_ai):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    started, release, calls = slow_ai
+    seed_rooms(database, [{"id": "paged", "title": "Paged", "question": f"question-{index}"} for index in range(8)])
+    set_browser_token(page, security.create_token("alice"))
+    page.locator('[data-room="paged"]').click()
+    expect(page.locator(".message.assistant")).to_have_count(5)
+    page.locator(".question").fill("new-question")
+    page.locator(".send-button").click()
+    assert started.wait(5)
+    page.reload()
+    expect(page.locator('.message.assistant[data-state="processing"]')).to_have_count(1)
+    expect(page.locator(".message.assistant")).to_have_count(5)
+    page.locator(".chat-body").evaluate("pane => pane.scrollTop = 0")
+    expect(page.locator(".message.assistant")).to_have_count(9)
+    release.set()
+    expect(page.locator('.message.assistant[data-state="processing"]')).to_have_count(0, timeout=10000)
+    expect(page.locator(".message.assistant")).to_have_count(9)
+    assert page.locator(".message.user .message-text").all_text_contents() == [f"question-{index}" for index in range(8)] + ["new-question"]
+    assert len(calls) == 1
+
+
 def test_chat_retry_preserves_rooms_and_renders_plain_text(browser_page, database, ai_mock):
     from playwright.sync_api import expect
 

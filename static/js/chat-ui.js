@@ -1,7 +1,7 @@
 import { openLogin } from './auth-ui.js'
 import { setDrawer, renderHistory, copyText } from './chat-room.js'
 import {
-    chats, activeId, loading, isProcessing, updateInput, render, loadChat,
+    chats, activeId, loading, isProcessing, updateInput, render, loadChat, loadEarlier,
     newChat, deleteChat, selectChat, switchChatOwner, handleSubmit, stopWaiting, retryChat
 } from './chat-action.js'
 
@@ -14,6 +14,14 @@ const bindChatEvents = () => {
     $('.stop-button').addEventListener('click', stopWaiting)
     $('.retry')      .addEventListener('click', retryChat)
     $('.reauth')     .addEventListener('click', openLogin)
+
+    $('.chat-body').addEventListener('scroll', event => {
+        const pane = event.currentTarget
+        if (pane.scrollTop === 0 && pane.scrollHeight > pane.clientHeight) loadEarlier()
+    })
+    $('.chat-body').addEventListener('wheel', event => {
+        if (event.deltaY < 0 && event.currentTarget.scrollTop === 0) loadEarlier()
+    }, { passive: true })
 
     $('.question').addEventListener('input', () => {
         $('.question').removeAttribute('aria-invalid')

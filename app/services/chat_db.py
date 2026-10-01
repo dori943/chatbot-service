@@ -80,7 +80,7 @@ async def expire_processing(user_id: str, db: AsyncSession):
         log_event("chat_processing_expired", count=expired.rowcount)
 
 
-async def get_list_chat(user_id: str, db: AsyncSession, room_id: str | None = None):
+async def get_list_chat(user_id: str, db: AsyncSession, room_id: str | None = None, before_id: int | None = None):
     try:
         await expire_processing(user_id, db)
         query = (
@@ -95,10 +95,13 @@ async def get_list_chat(user_id: str, db: AsyncSession, room_id: str | None = No
                 ChatLog.created_at,
             )
             .where(ChatLog.user_id == user_id)
-            .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
         )
         if room_id is not None:
-            query = query.where(ChatLog.room_id == room_id)
+            query = query.where(ChatLog.room_id == room_id).order_by(ChatLog.id.desc()).limit(5)
+            if before_id is not None:
+                query = query.where(ChatLog.id < before_id)
+        else:
+            query = query.order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
         rows = await db.execute(query)
         chats = rows.all()
         await db.commit()

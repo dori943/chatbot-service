@@ -118,10 +118,12 @@ def validate_result(result: AIResult):
     result.user_message = USER_MESSAGES.get(result.error_code, USER_MESSAGES[ErrorCode.UNKNOWN])
 
 
-async def get_my_chat(user_id: str, db: AsyncSession, room_id: str | None = None):
+async def get_my_chat(user_id: str, db: AsyncSession, room_id: str | None = None, before_id: int | None = None):
     if room_id is not None:
         room_id = validate_room_id(room_id)
-    rows = await chat_db.get_list_chat(user_id, db, room_id)
+    if before_id is not None and (room_id is None or not 1 <= before_id <= 9223372036854775807):
+        raise APIError(422, ErrorCode.INVALID_INPUT, "이전 기록 조회에는 방 ID와 유효한 기록 ID가 필요합니다.")
+    rows = await chat_db.get_list_chat(user_id, db, room_id, before_id)
     return [
         {
             "id"         : row.id,

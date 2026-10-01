@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MAX_CHATS, request_chat, request_rooms, request_history, request_delete_room, uid, loadRooms, saveRooms } from '../static/js/chat-service.js';
+import { MAX_CHATS, request_chat, request_rooms, request_history, refresh_history, request_delete_room, uid, loadRooms, saveRooms } from '../static/js/chat-service.js';
 
 test('로그인 토큰과 질문을 전송하고 답변을 반환한다', async t => {
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -168,7 +168,42 @@ test('방 목록과 방별 기록은 인증된 GET 요청으로 매번 조회한
   assert.deepEqual(messages.map(message => message.text), ['이전 질문', '이전 답변', '최근 질문', '최근 답변']);
   await request_history('room / 한글', 'token');
   assert.equal(urls.length, 3);
-  assert.equal(urls[1], '/api/me/chats?room_id=' + encodeURIComponent('room / 한글'));
+  assert.equal(new URL(urls[1], 'http://localhost').searchParams.get('room_id'), 'room / 한글');
+});
+
+test('이전 페이지는 마지막 기록 ID보다 작은 5건을 요청한다', async t => {
+  t.mock.method(globalThis, 'fetch', async url => {
+    assert.equal(url, '/api/me/chats?room_id=room-a&before_id=6');
+    return Response.json([]);
+  });
+  assert.deepEqual(await request_history('room-a', 'token', undefined, 6), []);
+});
+
+test('갱신 중 쌓인 새 대화와 과거 처리 중 기록을 중복 없이 합친다', async t => {
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    id: index + 1, status: 'success', question: `q${index + 1}`, answer: `a${index + 1}`,
+  }));
+  const cursors = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    const before = Number(new URL(url, 'http://localhost').searchParams.get('before_id')) || Infinity;
+    cursors.push(before);
+    return Response.json(rows.filter(row => row.id < before).slice(-5).reverse());
+  });
+  const previous = rows.slice(0, 8).flatMap(row => [
+    { id: row.id, role: 'user', text: row.question },
+    { id: row.id, role: 'assistant', status: row.id === 1 ? 'processing' : 'success', text: row.answer },
+  ]);
+  previous.push({ role: 'user', text: 'optimistic' }, { role: 'assistant', status: 'processing' });
+  const messages = await refresh_history('room-a', previous, 'token');
+  assert.deepEqual(messages.filter(row => row.role === 'user').map(row => row.id), rows.map(row => row.id));
+  assert.equal(messages.length, 40);
+  assert.equal(messages[1].status, 'success');
+  assert.deepEqual(cursors, [Infinity, 16, 11, 2]);
+});
+
+test('방이 삭제되면 갱신 시 보관 중인 과거 기록도 비운다', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json([]));
+  assert.deepEqual(await refresh_history('room-a', [{ id: 1, role: 'user', text: 'deleted' }], 'token'), []);
 });
 
 test('방 삭제는 인증된 DELETE 요청으로 서버에 전달한다', async t => {

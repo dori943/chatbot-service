@@ -1,47 +1,14 @@
+# 실행 가이드
 
-## 실행 방법
-### 1. 환경변수 설정
-```
-.env.example => 복붙 + .env로 이름변경
-```
-### 2. Docker Compose 실행
-```bash
-docker compose up --build -d
-```
+실행 절차·환경 변수·DB 정의는 [README](../README.md#실행-및-배포)에 통합한다.
 
-### 3. 실행상태 / 로그 확인
-```
-# 실행 상태
-docker ps             # 기존 도커 명령어와 동일합니다.
-docker compose logs  
-docker compose logs [컨테이너명]  # 특정 컨테이너 로그만 확인
-```
+| 항목 | 문서 |
+|---|---|
+| 로컬 Compose 실행·외부 배포 | [실행 및 배포](../README.md#실행-및-배포) |
+| 앱·DB·AI 환경 변수 | [환경 변수](../README.md#환경-변수) |
+| 테이블·필드 | [DB 구조](../README.md#db-구조) |
+| 기록 확인용 API·SQL | [DB 확인 방법](../README.md#db-확인-방법) |
+| 자동 테스트 | [테스트 가이드](../docs/testing-guide.md) |
 
-### 4. 도커 종료
-```
-docker compose stop
-```
-
-## DB 테이블
-[init.sql 보러가기](/data/init.sql)
-```
-login
-- id: varchar(50)
-- pw: varchar(255)
-```
-
-## 통신 방법
-```
-# 백엔드 서버와 통신 시 해당 주소로 요청 전송하시면 됩니다.
-backend:8000/[요청할 api]
-```
-
-## 볼륨 / 네트워크
-```
-# 볼륨 
-mysql-data   - mysql 컨테이너
-
-# 네트워크
-chatbot-network  - 백엔드 서버, mysql 컨테이너
-=> 차후 프론트/AI 서버 추가 가능성
-```
+브라우저는 http://127.0.0.1:8000에 접속하며 프론트 API는 같은 주소의 상대 경로를 사용한다.
+Compose 내부 DB 주소는 db:3306이다. 기존 DB 볼륨은 일반 재시작·재빌드 시 유지된다.

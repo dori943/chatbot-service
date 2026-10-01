@@ -115,6 +115,50 @@ def test_failed_answer_appears_in_history(client, auth_headers, ai_mock):
     assert row["room_name"] == "Test room"
 
 
+def test_room_history_pages_remain_stable_when_new_questions_arrive(client, database, auth_headers):
+    with database() as db:
+        for index in range(12):
+            db.add(ChatLog(user_id="alice", room_id="room-a", room_name="Room", question=str(index),
+                           status="success", request_id=uuid4().hex, created_at=datetime(2026, 1, 1)))
+        db.flush()
+        ids = [row.id for row in db.query(ChatLog).order_by(ChatLog.id.desc())]
+        for user, room in [("bob", "room-a"), ("alice", "room-b")]:
+            db.add(ChatLog(user_id=user, room_id=room, room_name="Private", question="private",
+                           status="success", request_id=uuid4().hex, created_at=datetime(2026, 1, 1)))
+        db.commit()
+
+    first = client.get("/api/me/chats?room_id=room-a", headers=auth_headers).json()
+    assert [row["id"] for row in first] == ids[:5]
+    with database() as db:
+        db.add(ChatLog(user_id="alice", room_id="room-a", room_name="Room", question="new",
+                       status="processing", request_id=uuid4().hex, created_at=datetime.now(timezone.utc).replace(tzinfo=None)))
+        db.commit()
+
+    collected = first[:]
+    for expected in [ids[5:10], ids[10:], []]:
+        response = client.get("/api/me/chats", params={"room_id": "room-a", "before_id": collected[-1]["id"]}, headers=auth_headers)
+        assert response.status_code == 200
+        page = response.json()
+        assert [row["id"] for row in page] == expected
+        collected.extend(page)
+    assert [row["id"] for row in collected] == ids
+    assert len(client.get("/api/me/chats", headers=auth_headers).json()) == 14
+    assert client.get("/api/me/chats?room_id=room-a", headers=auth_headers).json()[0]["status"] == "processing"
+
+
+@pytest.mark.parametrize("params", [
+    {"room_id": "room-a", "before_id": 0},
+    {"room_id": "room-a", "before_id": -1},
+    {"room_id": "room-a", "before_id": 9223372036854775808},
+    {"room_id": "room-a", "before_id": "invalid"},
+    {"before_id": 5},
+])
+def test_history_rejects_invalid_cursor(client, auth_headers, params):
+    response = client.get("/api/me/chats", params=params, headers=auth_headers)
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+
+
 def test_room_list_history_and_delete_are_owned(client, database, auth_headers):
     with database() as db:
         for user, room, name, question, status in [

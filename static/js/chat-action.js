@@ -1,5 +1,5 @@
 import { auth, syncAuthState, clearAuth, openLogin } from './auth-ui.js'
-import { request_chat, request_rooms, request_history, request_delete_room, chatError, uid, loadRooms, saveRooms } from './chat-service.js'
+import { CHAT_PAGE_SIZE, request_chat, request_rooms, request_history, refresh_history, request_delete_room, chatError, uid, loadRooms, saveRooms } from './chat-service.js'
 import { setDrawer, setBusy, setStatus, renderHistory, renderChat } from './chat-room.js'
 import { toast } from './toast.js'
 
@@ -36,6 +36,14 @@ const cancelLoading = () => {
     loading = null
 }
 
+// 처리 중인 질문이 있으면 잠시 후 상태를 다시 조회한다.
+const schedulePoll = () => {
+    clearTimeout(pollTimer)
+    if (!paused && isProcessing() && !requests.has(activeId)) {
+        pollTimer = setTimeout(() => loadChat(activeId, false, true), POLL_INTERVAL_MS)
+    }
+}
+
 // 조회·삭제 오류를 표시하고 만료된 인증을 해제한다.
 const showHistoryError = (error, token) => {
     if (error.name === 'AbortError') return
@@ -62,15 +70,23 @@ export const loadChat = async (id = activeId, refreshRooms = false, quiet = fals
             const rooms = await request_rooms(request.token, request.controller.signal)
             if (loading !== request || ownerId !== request.userId) return
             const sending = chats.filter(chat => requests.has(chat.id) && !rooms.some(room => room.id === chat.id))
-            chats = [...sending, ...rooms.map(room => ({ ...room, messages: chats.find(chat => chat.id === room.id)?.messages || [] }))]
+            chats = [...sending, ...rooms.map(room => {
+                const previous = chats.find(chat => chat.id === room.id)
+                return { ...room, messages: previous?.messages || [], beforeId: previous?.beforeId }
+            })]
             if (!chats.some(chat => chat.id === id)) activeId = null
             save()
         }
         const current = chats.find(chat => chat.id === activeId)
         if (current) {
-            const messages = await request_history(current.id, request.token, request.controller.signal)
+            const messages = quiet
+                ? await refresh_history(current.id, current.messages, request.token, request.controller.signal)
+                : await request_history(current.id, request.token, request.controller.signal)
             if (loading !== request || ownerId !== request.userId) return
             if (messages.length || !requests.has(current.id)) current.messages = messages
+            if (!quiet || current.beforeId === undefined) {
+                current.beforeId = messages.length >= CHAT_PAGE_SIZE * 2 ? messages[0].id : null
+            }
             if (!messages.length && !requests.has(current.id)) {
                 chats = chats.filter(chat => chat.id !== current.id)
                 activeId = null
@@ -86,9 +102,34 @@ export const loadChat = async (id = activeId, refreshRooms = false, quiet = fals
         if (loading === request) {
             loading = null
             render(quiet)
-            if (!paused && isProcessing() && !requests.has(activeId)) {
-                pollTimer = setTimeout(() => loadChat(activeId, false, true), POLL_INTERVAL_MS)
-            }
+            schedulePoll()
+        }
+    }
+}
+
+// 이전 대화 5건을 앞에 붙이고 읽던 위치를 유지한다.
+export const loadEarlier = async () => {
+    const current = chats.find(chat => chat.id === activeId)
+    if (!auth || loading || !current?.beforeId) return
+    clearTimeout(pollTimer)
+    const request = { controller: new AbortController(), token: auth.token, userId: ownerId }
+    loading = request
+    setStatus('이전 대화를 불러오는 중입니다…', 'loading')
+    setBusy(Boolean(isProcessing()), true, paused)
+
+    try {
+        const messages = await request_history(current.id, request.token, request.controller.signal, current.beforeId)
+        if (loading !== request || ownerId !== request.userId) return
+        current.messages.unshift(...messages)
+        current.beforeId = messages.length === CHAT_PAGE_SIZE * 2 ? messages[0].id : null
+        showChatStatus()
+    } catch (error) {
+        if (loading === request) showHistoryError(error, request.token)
+    } finally {
+        if (loading === request) {
+            loading = null
+            render(true, true)
+            schedulePoll()
         }
     }
 }
@@ -113,10 +154,10 @@ export const updateInput = () => {
 }
 
 // 대화 목록·메시지·입력 상태를 함께 갱신한다.
-export const render = (quiet = false) => {
+export const render = (quiet = false, prepend = false) => {
     history.replaceState(null, '', location.pathname + location.search + (activeId ? '#room=' + encodeURIComponent(activeId) : ''))
     renderHistory(chats, activeId, Boolean(loading?.deleting || loading?.refreshRooms))
-    renderChat(chats.find(chat => chat.id === activeId), quiet)
+    renderChat(chats.find(chat => chat.id === activeId), quiet, prepend)
     setBusy(Boolean(isProcessing()), Boolean(loading), paused)
     updateInput()
 }
@@ -280,7 +321,7 @@ export const handleSubmit = async event => {
         if (requests.get(current.id) === request) {
             requests.delete(current.id)
             if (activeId === current.id && !paused) {
-                const loaded = await loadChat(current.id, true)
+                const loaded = await loadChat(current.id, true, true)
                 if (!loaded || ownerId !== request.userId || activeId && activeId !== current.id) return
                 const last = chats.find(chat => chat.id === activeId)?.messages.at(-1)
                 const completed = last?.status === 'success' && last.id > request.lastId
@@ -290,7 +331,7 @@ export const handleSubmit = async event => {
                 }
                 if (!$('.auth-dialog').open) $('.question').focus()
             }
-            if (activeId === current.id) render()
+            if (activeId === current.id) render(true)
         }
     }
 }

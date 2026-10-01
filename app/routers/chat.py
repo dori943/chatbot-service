@@ -20,11 +20,12 @@ async def send_chat(
 
 @router.get("/me/chats")
 async def get_my_chat(
-    user_id : str          = Depends(get_token_id),
-    db      : AsyncSession = Depends(get_db),
-    room_id : str | None   = None,
+    user_id   : str          = Depends(get_token_id),
+    db        : AsyncSession = Depends(get_db),
+    room_id   : str | None   = None,
+    before_id : int | None   = None,
 ):
-    return await chat_main.get_my_chat(user_id, db, room_id)
+    return await chat_main.get_my_chat(user_id, db, room_id, before_id)
 
 
 @router.get("/me/rooms")

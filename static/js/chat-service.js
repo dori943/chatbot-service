@@ -1,6 +1,7 @@
 import { client } from './client.js'
 
 export const MAX_CHATS = 30
+export const CHAT_PAGE_SIZE = 5
 
 const errors = {
     401       : '로그인이 필요합니다. 다시 로그인해 주세요.',
@@ -29,9 +30,11 @@ export const chatError = code => code?.startsWith('AI_')
     ? 'AI 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.'
     : '서버 오류로 답변을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.'
 
-// 선택한 방의 질문·답변·처리 상태를 오래된 순서로 불러온다.
-export const request_history = async (room_id, token, signal) => {
-    const { data } = await client(`/api/me/chats?room_id=${encodeURIComponent(room_id)}`, undefined, {
+// 선택한 방의 기록 5건을 조회하며 이전 페이지는 기록 ID로 지정한다.
+export const request_history = async (room_id, token, signal, beforeId) => {
+    const query = new URLSearchParams({ room_id })
+    if (beforeId) query.set('before_id', beforeId)
+    const { data } = await client(`/api/me/chats?${query}`, undefined, {
         method: 'GET', token, signal, errors,
     })
     return data.reverse().flatMap(row => [
@@ -42,6 +45,30 @@ export const request_history = async (room_id, token, signal) => {
                 : row.status === 'success' ? row.answer : chatError(row.error_code),
         },
     ])
+}
+
+// 읽은 과거 기록을 유지하면서 새 기록과 아직 처리 중인 기록을 갱신한다.
+export const refresh_history = async (room_id, previous, token, signal) => {
+    let page = await request_history(room_id, token, signal)
+    if (!page.length) return []
+    const latest = [...page]
+    const newestId = previous.findLast(message => message.id)?.id
+    while (newestId && page[0]?.id > newestId && page.length === CHAT_PAGE_SIZE * 2) {
+        page = await request_history(room_id, token, signal, page[0].id)
+        latest.unshift(...page)
+    }
+
+    const received = new Set(latest.map(message => message.id))
+    for (const message of previous) {
+        if (message.status !== 'processing' || !message.id || received.has(message.id)) continue
+        const updated = await request_history(room_id, token, signal, message.id + 1)
+        latest.push(...updated.filter(item => item.id === message.id))
+        received.add(message.id)
+    }
+
+    const messages = new Map(previous.filter(message => message.id).map(message => [message.id + message.role, message]))
+    latest.forEach(message => messages.set(message.id + message.role, message))
+    return [...messages.values()].sort((a, b) => a.id - b.id || (a.role === 'user' ? -1 : 1))
 }
 
 // 선택한 방의 서버 대화 기록을 삭제한다.

@@ -1,4 +1,4 @@
-# 챗봇 서비스 코드 분석 및 학습 요약 (v1.3)
+# 챗봇 서비스 코드 분석 및 학습 요약 (v1.4)
 
 본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인, AI 연동, DB 영속화, 자료구조 최적화)을 분석한 내용을 체계적으로 정리한 문서입니다.
 
@@ -69,6 +69,22 @@
      - 동일 모델 재시도 대상(`RETRY_SAME_MODEL`): 503 서버 과부하, 429 할당량 초과, 일시적 네트워크 순단. (401 키 오류나 400은 재시도 무의미하므로 즉시 중단)
      - 모델 교체 폴백 대상(`FALLBACK_TRIGGERS`): 특정 모델 장애 시에만 예비 모델로 넘어가며, 유해성 검열(BLOCKED) 등 다른 모델로도 해결 안 되는 에러는 즉시 루프 중단.
   6. **무장애 결과 포장**: 모든 시도가 실패해도 서버가 죽지 않고 에러별 친절한 한국어 안내 메시지를 담은 `AIResult(status='timeout'|'error')` 대체 객체를 안전하게 반환.
+- **클라이언트 캐싱 및 싱글톤 패턴 (`_client`)**:
+  - `@lru_cache(maxsize=1)` 데코레이터를 적용하여 Google GenAI 클라이언트를 싱글톤(Singleton)으로 생성 및 재사용.
+  - 매 요청마다 클라이언트를 새로 생성할 때 발생하는 TCP 소켓 연결 및 SSL 인증 핸드셰이크 오버헤드를 원천 제거.
+- **지능형 예외 감별기 (`_classify`)**:
+  - `asyncio.TimeoutError` ➔ `ErrorCode.TIMEOUT`
+  - `errors.APIError`:
+    - HTTP 401/403 또는 HTTP 400(`API_KEY_*` reason / 'api key' 문구) ➔ 설정 오류 `ErrorCode.CONFIG`
+    - HTTP 429 ➔ 요청 한도/할당량 초과 `ErrorCode.RATE_LIMIT`
+    - HTTP 400/404 ➔ 잘못된 모델/문법 `ErrorCode.BAD_REQUEST`
+    - HTTP 500 이상 ➔ 구글 상위 서버 장애 `ErrorCode.UPSTREAM`
+  - 하위 전송 계층 예외: SDK 버전에 종속되지 않도록 예외 클래스명(`type(exc).__name__`) 문자열 검사로 `ConnectTimeout`, `ConnectError` 등을 `TIMEOUT` / `CONNECTION`으로 유연하게 맵핑.
+- **응답 텍스트 추출 및 안전 검열 필터 (`_extract_answer`)**:
+  - **입력 프롬프트 차단**: 질문 자체가 정책 위반인 경우 사전 차단(`prompt_feedback.block_reason`) 감지 ➔ `ErrorCode.BLOCKED` 반환.
+  - **생성 도중 차단**: 모델이 답변을 생성하다가 안전 정책에 걸린 경우(`candidates[0].finish_reason` 내 SAFETY/BLOCK) ➔ `ErrorCode.BLOCKED` 반환.
+  - **토큰 한도 도달**: 최대 생성 토큰(`max_output_tokens`) 한도로 잘린 경우(`MAX_TOKENS`) ➔ `ErrorCode.TOKEN_LIMIT` 반환.
+  - **정상 텍스트**: 공백 제거(`.strip()`) 후 유효한 텍스트와 `None` 에러코드 반환 (비어있으면 `ErrorCode.EMPTY_RESPONSE`).
 
 ### 7단계: 데이터베이스 영속화 계층 (`app/services/chat_db.py`)
 SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 영속성(Persistence)과 트랜잭션을 전담합니다:
@@ -111,4 +127,4 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
 
 ---
 *작업 브랜치: `docs/lgt-back/code-analysis`*  
-*문서 버전: v1.3*
+*문서 버전: v1.4*

@@ -1,6 +1,22 @@
-# 챗봇 서비스 코드 분석 및 학습 요약 (v1.8)
+# 챗봇 서비스 코드 분석 및 학습 요약 (v1.9)
 
 본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인, AI 연동, DB 영속화, 자료구조 최적화)을 사용자 여정(User Journey) 순서에 맞춰 체계적으로 정리한 문서입니다.
+
+2026-10-01: PR #24 병합 후 `7a35186`의 프론트엔드·인증 흐름으로 2~4단계를 갱신했습니다. 기존 `auth.js`, `chat.js`, `chat-api.js`의 주석은 새 파일의 책임에 맞춰 재작성했습니다. 이전 문답지의 함수명이나 동작과 다르면 아래 현재 파일을 기준으로 확인하세요.
+
+### 리팩터링 전후 학습 지도
+
+| 이전 공부 위치 | 현재 위치 | 읽을 핵심 |
+|---|---|---|
+| `auth.js` | [auth-ui.js](../../static/js/auth-ui.js) + [auth-service.js](../../static/js/auth-service.js) | 인증 폼·상태 동기화와 토큰 읽기·요청의 분리 |
+| `chat-api.js` | [chat-service.js](../../static/js/chat-service.js) + [client.js](../../static/js/client.js) | 채팅 계약과 공통 HTTP 전송·오류·취소의 분리 |
+| `chat.js`의 이벤트 | [chat-ui.js](../../static/js/chat-ui.js) | submit·Enter·클릭·authchange가 어떤 함수를 부르는가 |
+| `chat.js`의 상태·요청 흐름 | [chat-action.js](../../static/js/chat-action.js) | 임시 질문 표시·실패 복구·계정 전환·재시도 |
+| `chat.js`의 렌더링 | [chat-room.js](../../static/js/chat-room.js) | 상태를 받아 목록·메시지·버튼을 그리는 과정 |
+| `chat.js`의 로컬 저장 | [chat-service.js](../../static/js/chat-service.js) | localStorage와 서버 DB의 차이 |
+| 인증·채팅 안내 | [toast.js](../../static/js/toast.js) | 이전 안내의 타이머가 새 안내를 숨기지 않도록 공유 타이머 사용 |
+
+정독 순서: `client → auth-service → auth-ui → chat-service → chat-action → chat-room → chat-ui → toast`. 각 파일 맨 위의 역할 설명을 읽고 함수별 주석으로 내려가세요.
 
 ---
 
@@ -14,44 +30,55 @@
 
 ### 2단계: 프론트엔드 UI 화면 (`templates/index.html`)
 - 채팅 입력을 위한 `<form id="chat-form">`, `<textarea id="question">`, 전송 버튼 렌더링.
-- JavaScript가 DOM 이벤트를 바인딩할 수 있도록 요소별 고유 식별자(`id`) 제공.
-- 상단 `<script type="module" src="/static/js/chat.js">` 및 `auth.js`를 통해 클라이언트 로직 모듈 로드.
+- JavaScript가 요소를 찾도록 `id`·`class`·`data-*`를 제공하고 새 JS는 주로 클래스 선택자를 사용합니다.
+- 상단 `<script type="module" src="/static/js/chat-ui.js">` 및 `auth-ui.js`를 로드합니다. 의존 모듈이 먼저 평가되며 같은 URL의 모듈은 페이지 안에서 공유됩니다.
 - 네이티브 `<dialog id="auth-dialog">` 모달과 `<form id="auth-form">`을 통한 로그인/회원가입 인터페이스 제공.
 
-### 3단계: 풀스택 계정 인증 및 토큰 발급 라이프사이클 (`static/js/auth.js`, `app/routers/auth.py`, `app/services/auth.py`, `app/utils/security.py`)
+### 3단계: 풀스택 계정 인증 및 토큰 발급 라이프사이클 (`auth-ui.js` → `auth-service.js` → `client.js` → 인증 API)
 사용자가 서비스를 이용하기 위한 첫 관문인 계정 생성, 자격증명 검증, 세션 상태 관리 및 보안 파이프라인:
-1. **프론트엔드 인증 모달 및 통신 (`static/js/auth.js`)**:
+1. **프론트엔드 인증 모달 및 통신 (`auth-ui.js`, `auth-service.js`, `client.js`)**:
    - **단일 폼 다중 모드 (Single Form Multi-Mode)**: `<dialog id="auth-dialog">` 내에서 단 하나의 `<form id="auth-form">` 인스턴스를 공유하며, `[data-tab]` 전환에 따라 `#confirm-wrap`의 가시성(`hidden`)과 필수 속성(`required`), 엔드포인트를 동적으로 스위칭하여 DOM 중복 제거.
    - **폼 제출 가로채기 (Event Interception - `event.preventDefault`)**: 브라우저의 기본 동작인 동기식 새로고침(Full Page Reload)을 차단하고, Fetch API를 통한 무중단 비동기 통신으로 전환.
-   - **클라이언트 1차 방어선 (Fail-Fast)**: 회원가입 모드일 때 비밀번호 일치 검사(`password !== confirm.value`)를 0ms 만에 수행하여 불량 요청의 서버 전송 차단.
-   - **다국어 UTF-8 지원 JWT 디코딩**: `atob()`의 한글 깨짐을 방지하기 위해 `TextDecoder`를 결합하여 안전하게 클레임 파싱 및 형식(Type) 검증(`getAuthenticatedId`).
-   - **이벤트 기반 디커플링 (`notifyAuthChange`)**: `CustomEvent('authchange')`를 전역 window에 발행하여 `chat.js`와의 결합도를 최소화.
+   - **전송 전 검사**: ID 공백 제거 후 3~50자, 비밀번호 8자 이상·UTF-8 72바이트 이하, 가입 시 확인값 일치를 검사합니다. 실제 pw의 앞뒤 공백은 보존합니다.
+   - **다국어 JWT 디코딩 (`getTokenID`)**: Base64URL → 바이트 → UTF-8 → JSON 순서로 claims 객체를 읽습니다. 이름과 달리 ID 문자열이 아닌 객체를 반환하며 서버 서명 검증을 대신하지 않습니다.
+   - **공통 통신**: `submitAuth → request_auth → client`로 JSON POST를 보내며 인증에도 30초 대기 제한과 취소 처리가 적용됩니다.
+   - **가입 직후 로그인**: 가입·로그인 모두 서버의 token을 저장하고 `syncAuthState('login')`으로 화면을 전환합니다.
+   - **이벤트 전달**: `syncAuthState`가 `authchange`에 id와 reason을 넣어 발행하면 `chat-ui`가 `switchChatOwner`로 전달합니다.
+   - **늦은 응답 방어**: 요청 객체·모달 열림·요청 당시 토큰을 재확인합니다. `rejectedToken`은 저장소 삭제 실패 시 같은 토큰을 이 탭에서 다시 인정하지 않게 합니다.
    - **안정성 최적화**: 32비트 정수 오버플로우 방어 타이머(`Math.min(..., 2_147_483_647)`), 401 지연 응답에 의한 새 세션 증발 방지(`clearAuth` 경쟁 상태 방어), 멀티 탭 실시간 동기화(`window storage`).
 2. **인증 라우터 (`app/routers/auth.py`)**:
    - `POST /auth/register` 및 `POST /auth/login` 엔드포인트 제공.
    - Pydantic DTO(`AuthRequest`)를 통한 1차 형식 검증 및 `Depends(get_db)` 비동기 세션 의존성 주입 후 Service 계층으로 위임.
 3. **인증 서비스 비즈니스 로직 (`app/services/auth.py`)**:
-   - **`validate_auth`**: 아이디 공백 제거, 아이디 50자 제한(`VARCHAR(50)` 준수), 그리고 **Bcrypt의 72바이트 절삭 한계(Truncation Limit)**를 방어하기 위해 UTF-8 기준 72바이트 초과 비밀번호를 사전에 엄격히 차단(HTTP 422).
+   - **`validate_auth`**: 아이디 공백 제거 후 3~50자, 비밀번호 공백 여부·8자 이상·UTF-8 72바이트 이하를 검사하고 위반 시 422를 반환합니다. 서비스에서 먼저 제한하므로 bcrypt의 초과 입력 처리에 의존하지 않습니다.
    - **`register` (회원가입)**:
      - CPU 연산 집약적인 비밀번호 해싱을 `await run_in_threadpool(hash_password, data.pw)`로 비동기 이벤트 루프에서 격리하여 서버 멈춤 방지.
      - DB INSERT 중 `IntegrityError` 발생 시 MySQL 고유 에러 코드 `ER.DUP_ENTRY(1062)`를 판정하여 중복 계정 가입 시 HTTP 409 Conflict(`ErrorCode.USER_EXISTS`)로 정밀 변환.
+     - 계정 저장 전에 서명 키를 확인하고, 저장 완료 후 JWT를 발급하여 `message`, `token`, `token_type`을 반환합니다.
    - **`login` (로그인 및 토큰 발급)**:
      - SQLAlchemy PK 전용 최적화 메서드 `db.get(Login, data.id)`로 고속 유저 조회 후 즉시 커밋하여 커넥션 조기 반환.
      - **단락 평가(Short-Circuit)**와 `run_in_threadpool(verify_password)`를 결합하여 유저 부재 시 무거운 비밀번호 연산을 즉시 생략하고 이벤트 루프 보호.
-     - **사용자 열거(User Enumeration) 공격 방어**: 아이디 부재와 비밀번호 불일치를 구분하지 않고 동일한 HTTP 401 UNAUTHORIZED 에러 반환.
-     - **최소 `try` 스코프 원칙**: 비즈니스 조건 분기(`if not valid`)를 `try` 밖에 배치하여 401 비즈니스 예외가 503 서버 장애로 은닉되는 마스킹 방지.
+     - 아이디 부재와 비밀번호 불일치 모두 같은 401 안내를 사용하지만, 없는 계정에서는 해시 연산을 생략하므로 응답 시간까지 같아지는 것은 아닙니다.
+     - **최소 `try` 스코프 원칙**: bcrypt의 `ValueError` 처리와 `if not valid`의 인증 실패 처리를 읽기 쉽게 분리합니다. 현재 `APIError`는 `ValueError`가 아닙니다.
      - 검증 성공 시 60분 유효기간을 가진 JWT 액세스 토큰 발급.
    - **`check_user` (유저 실존 검증)**:
      - 토큰 검증 필터에서 호출되며, `select(Login.id)` PK 단일 컬럼만 프로젝션하여 인덱스 스캔을 최소화하고 유저 실존 여부 확인.
 4. **보안 유틸리티 (`app/utils/security.py`)**:
-   - `hash_password`: `bcrypt.gensalt()`(Cost Factor 12)를 적용한 단방향 암호화로 레인보우 테이블 공격 무력화.
-   - `verify_password`: `bcrypt.checkpw` 기반의 상수 시간 비교(Constant-Time Comparison)로 타이밍 공격 방어.
+   - `hash_password`: `bcrypt.gensalt()`로 생성한 salt를 사용해 비밀번호 해시를 만듭니다. 복호화하는 암호화와 다릅니다.
+   - `verify_password`: `bcrypt.checkpw`로 입력과 저장된 해시의 일치를 확인합니다. 이 호출만으로 로그인 전체의 시간 차이가 사라지지는 않습니다.
    - `create_token`: UTC 기준 만료 시간(`exp`)과 유저 식별자(`id`)를 담아 HS256 알고리즘과 `SECRET_KEY`로 전자 서명된 JWT 토큰 생성.
 
-### 4단계: 프론트엔드 채팅 이벤트 제어 및 통신 (`static/js/chat.js` & `chat-api.js`)
-- **이벤트 바인딩 (`bindChatEvents`)**: DOM의 `#chat-form` 제출(submit) 및 Enter 키 입력 이벤트를 감지하여 핸들러로 위임.
-- **기본 동작 방지 (`handleSubmit`)**: 브라우저의 기본 페이지 새로고침 동작을 `event.preventDefault()`로 가로채어(Intercept) 싱글 페이지 방식의 비동기 통신으로 전환.
-- **인증 토큰 첨부 및 백엔드 호출 (`requestReply`)**: 발급받은 JWT 토큰을 `Authorization: Bearer <token>` 헤더에 탑재하고 Fetch API를 통해 백엔드의 `/api/chat` 엔드포인트로 JSON 데이터(`room_id`, `room_name`, `question`)를 POST 요청.
+### 4단계: 프론트엔드 채팅 이벤트·상태·화면·통신의 연결
+
+1. **이벤트 진입 (`chat-ui.bindChatEvents`)**: submit·Enter를 `handleSubmit`에 연결합니다. Shift+Enter와 IME 조합 중 Enter는 전송하지 않습니다. 목록과 메시지는 부모에서 클릭을 받는 이벤트 위임을 사용합니다.
+2. **액션 (`chat-action.handleSubmit`)**: 인증·입력을 확인하고 방을 준비한 뒤 내 질문을 임시 표시합니다. 현재 요청을 `{ controller, token }` 객체로 기억합니다.
+3. **채팅 계약 (`chat-service.request_chat`)**: `room_id`, `room_name`, `question`과 Bearer 토큰을 공통 `client`에 전달합니다.
+4. **공통 통신 (`client`)**: JSON POST, HTTP 상태·JSON 오류·사용자 취소·30초 제한을 처리합니다. 성공은 `{ data, requestId }`, 오류는 `status`, `errorCode`, `requestId` 등을 전달합니다. 이 함수는 `data.answer`를 별도로 검사하지 않습니다.
+5. **성공·실패 반영 (`chat-action`)**: `pending !== request`인 오래된 결과를 무시합니다. 성공 시 답변을 추가하고 로컬 저장, 실패 시 임시 질문·신규 방을 되돌립니다. 이는 서버 DB rollback과 다릅니다.
+6. **화면 (`chat-room`)**: 상태를 받아 목록·메시지·입력 잠금·오류·요청 ID·재시도 버튼을 표현합니다. 메시지는 `textContent`로 넣으며 `<template>`을 복제해 DOM을 만듭니다.
+7. **계정 전환 (`switchChatOwner`)**: 진행 중 요청을 취소하고 사용자별 로컬 목록을 불러옵니다. 만료/401로 남긴 초안은 같은 계정에만 복원하고 명시적 로그아웃이나 다른 계정에는 넘기지 않습니다.
+
+브라우저 방 삭제는 서버 기록을 삭제하지 않습니다. fetch 취소도 서버 AI 호출·DB 저장의 취소를 보장하지 않습니다. 서버 기록을 통한 화면 복원 기능은 현재 이 경로에 없습니다.
 
 ### 5단계: 백엔드 채팅 라우터 및 토큰 인가 (`app/routers/chat.py` & `app/core/dependencies.py`)
 - `@router.post("/chat")`: 프론트엔드의 요청을 수신하는 비동기(`async def`) 핸들러.
@@ -153,11 +180,11 @@
 11. **예외 처리 스코프 최소화 원칙 (Minimal `try` Scope) 및 예외 마스킹 방지**:
     - `auth.login()`에서 `if not valid:` 비즈니스 조건 분기를 `try` 블록 밖으로 분리한 이유.
     - 실제 `ValueError`를 발생시킬 수 있는 Bcrypt 연산만 `try`에 격리하여, 단순 비밀번호 오타(401 UNAUTHORIZED 정상 비즈니스 분기)와 DB 해시 손상(503 AUTH_UNAVAILABLE 시스템 결함)의 성격을 명확히 분리.
-    - `try` 블록 비대화로 인해 401 비즈니스 예외가 `except ValueError`에 가로채져 503 서버 장애로 둔갑하는 예외 마스킹(버그 은닉)을 원천 차단.
+    - 현재 `APIError`는 `ValueError`가 아니므로 401을 try 안에서 발생시켜도 해당 except에 잡히지 않습니다. 분리의 의미는 해시 검증 장애와 정상적인 인증 실패를 구분해서 읽는 데 있습니다.
 12. **프론트엔드 폼 제출 가로채기(Event Interception)와 브라우저 상태 동기화**:
     - **`event.preventDefault()`**: HTML `<form>`의 기본 동작인 동기식 전체 새로고침(Full Page Reload)을 차단하고, Fetch 비동기 통신으로 주도권을 가로채어 싱글 페이지(SPA) 무중단 사용자 경험 보장.
-    - **클라이언트 1차 방어선 (Client Fail-Fast)**: 불필요한 네트워크 트래픽과 서버 Bcrypt 연산 부하를 막기 위해, 브라우저 단에서 비밀번호 확인 일치(`password !== confirm.value`)를 0ms 만에 선제 검증.
-    - **이벤트 기반 디커플링 (`CustomEvent`)**: `auth.js`와 `chat.js` 간의 직접 함수 호출을 배제하고, `window.dispatchEvent(new CustomEvent('authchange'))`를 통해 옵저버 패턴으로 상태 변경을 전파하여 모듈 간 결합도를 최소화.
+    - **클라이언트 1차 방어선 (Client Fail-Fast)**: 인증 UI에서 길이·비밀번호 확인을 검사해 잘못된 입력을 전송 전에 알립니다. 서버도 같은 규칙을 독립적으로 검사합니다.
+    - **이벤트와 직접 호출의 역할 구분**: `auth-ui`는 `authchange`로 계정 변경을 알리고 `chat-ui`가 액션에 전달합니다. 채팅 액션은 인증 확인·로그아웃·로그인 창 열기를 직접 호출하므로 두 영역이 완전히 독립된 것은 아닙니다.
     - **정밀한 브라우저 환경 방어**: 32비트 정수 오버플로우 방어 타이머(`Math.min(..., 2_147_483_647)`), 401 지연 응답에 의한 새 세션 증발 방지(`clearAuth` 경쟁 상태 방어), 그리고 `window storage` 이벤트를 통한 멀티 탭 실시간 동기화 구현.
 13. **인증(Authentication) vs 인가(Authorization): Bcrypt와 JWT의 역할 분담과 협업 메커니즘**:
     - **Bcrypt (인증 / 본인 확인 - '호텔 체크인')**:
@@ -172,4 +199,4 @@
 
 ---
 *작업 브랜치: `docs/lgt-back/code-analysis`*  
-*문서 버전: v1.8*
+*문서 버전: v1.9 — 프론트엔드·인증 학습 경로 갱신*

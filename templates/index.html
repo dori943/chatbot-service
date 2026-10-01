@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="/static/css/fonts.css">
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/style.css">
+    <!-- 모듈 진입점: chat-ui는 이벤트를 chat-action에 연결하고, auth-ui는 인증 화면·상태를 초기화한다.
+         HTTP 전송은 각 service 모듈을 거쳐 client.js로 모인다. 같은 URL의 ES 모듈은 페이지 내에서 공유된다. -->
     <script type="module" src="/static/js/chat-ui.js"></script>
     <script type="module" src="/static/js/auth-ui.js"></script>
   </head>
@@ -49,8 +51,8 @@
       </div>
       <!-- [사이드바 프로필 인증 트리거: data-auth]
            - CSR(Client-Side Rendering) 구조: HTML 자체는 '게스트' 기본 상태만 마크업하며, 템플릿 if 분기가 아님
-           - 실제 상태 분기 메커니즘: 브라우저가 auth.js 로드 시 localStorage의 JWT 토큰 유효성(getAuthenticatedId)을 판별하여
-             1) 회원 상태: 아바타 텍스트(ID 첫 글자) 및 아이디로 DOM을 동적 치환(renderAuthUI), 클릭 시 로그아웃(clearAuth)
+           - 실제 상태 분기: auth-ui.syncAuthState가 auth-service.getTokenID로 claims와 만료를 읽음 (서명 검증은 서버)
+             1) 회원 상태: syncAuthState가 아바타 텍스트(ID 첫 글자) 및 아이디를 표시, 클릭 시 clearAuth로 로그아웃
              2) 게스트 상태: 아래 마크업 기본값(G/게스트) 유지, 클릭 시 로그인/회원가입 모달 다이얼로그(showModal) 오픈 -->
       <button class="profile" data-auth>
         <span class="avatar">G</span>
@@ -76,8 +78,8 @@
         </div>
         <!-- [탑바 글로벌 인증 컨트롤]
              - HTML 자체는 비인증 상태('로그인' 버튼, 빈 사용자명)를 기본 마크업으로 렌더링
-             1) #header-user: auth.js가 JWT 토큰의 claims.id를 디코딩하여 주입하며, 유효 토큰 없을 시 hidden 유지
-             2) .login-button[data-auth]: auth.js에 의해 인증 상태에 따라 '로그인' ↔ '로그아웃' 텍스트를 동적 치환 -->
+             1) #header-user: auth-ui.syncAuthState가 claims.id를 표시하고 비로그인 상태에서는 숨김
+             2) .login-button[data-auth]: 같은 함수가 인증 상태에 맞춰 '로그인' ↔ '로그아웃' 텍스트를 바꿈 -->
         <div class="top-actions">
           <span id="header-user" class="header-user" hidden></span>
           <button class="login-button" data-auth>로그인</button>
@@ -191,7 +193,8 @@
           <input id="auth-confirm" class="auth-confirm" type="password" autocomplete="new-password" placeholder="비밀번호를 한 번 더 입력하세요">
         </div>
         <!-- [단일 폼 제출 트리거]
-             활성화된 인증 탭(data-tab) 상태에 따라 auth.js가 버튼 텍스트를 '로그인' ↔ '회원가입'으로 동적 반영 -->
+             auth-ui.setAuthMode가 버튼 텍스트를 바꾸고 submitAuth가 모드에 맞는 엔드포인트로 요청한다.
+             현재 서버는 가입·로그인 모두 token을 반환하므로 두 성공 경로 모두 로그인 상태로 전환한다. -->
         <button class="auth-submit" type="submit">로그인</button>
       </form>
       <p id="auth-status" class="auth-status" role="status"></p>

@@ -36,8 +36,10 @@ async def check_user(user_id: str, db: AsyncSession) -> bool:
         log_event("auth_user_lookup_failed", exc=exc)
         # 세션 롤백으로 미완료 트랜잭션 정리
         await db.rollback()
-        # [예외 전파: raise]
+        # [예외 전파: raise (vs assert)]
         # - C#/C++(Unity/Unreal)의 'throw'와 동일하게 비상 상황에서 함수의 정상 흐름을 즉시 중단하고 예외 송출
+        # - 개발자 내부 디버깅용인 assert(최적화 배포 시 -O 옵션으로 증발)와 달리,
+        #   raise는 프로덕션 런타임 환경에서도 항상 살아남아 비즈니스 예외와 시스템 장애를 안전하게 통제함
         # - 호출자에게 데이터베이스 일시 장애(503) 전파
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "로그인 정보를 확인하지 못했습니다.") from None
 
@@ -195,7 +197,9 @@ async def login(data: AuthRequest, db: AsyncSession):
     # -------------------------------------------------------------------------
     # 유저가 존재하지 않거나 비밀번호가 일치하지 않는 경우
     if not valid:
-        # 계정 존재 여부를 유출하지 않는 표준 401 미인증 예외 반환 (사용자 열거 공격 방어)
+        # [런타임 비즈니스 예외 송출: raise (vs assert)]
+        # - 프로덕션 환경에서 영구히 동작하며, 계정 존재 여부를 유출하지 않는 표준 401 미인증 예외 반환 (사용자 열거 공격 방어)
+        # - 배포 시 최적화(-O)로 제거될 수 있는 디버깅용 assert 대신 raise를 사용하여 실서비스 보안 검증 보장
         raise APIError(401, ErrorCode.UNAUTHORIZED, "아이디 또는 비밀번호를 확인해 주세요.")
 
     # 사용자 고유 식별자를 페이로드에 담은 서명된 JWT 액세스 토큰 생성

@@ -405,6 +405,12 @@ async def generate_answer(
     if AI_FALLBACK_MODEL and AI_FALLBACK_MODEL != AI_MODEL:
         candidates.append(AI_FALLBACK_MODEL)
 
+    # -------------------------------------------------------------------------
+    # ■ 구조화된 이벤트 로깅 (app/core/logging.py log_event):
+    #   1) Key=Value 표준 규격: 단순 print가 아닌 Datadog/CloudWatch 연동용 정형화 로그 기록
+    #   2) request_id 추적: 동시 접속자가 많아도 특정 사용자의 단일 요청 흐름만 100% 필터링 추적
+    #   3) 개인정보(PII) 보호: 주민번호/비번 유출 방지를 위해 질문 원문(question) 대신 글자 수(q_len)만 기록
+    # -------------------------------------------------------------------------
     # AI 호출 시작 이벤트 로깅 (요청 ID, 모델명, 문맥 턴 수, 질문 길이 등)
     log_event(
         "ai_call_start",
@@ -424,6 +430,14 @@ async def generate_answer(
     # 보조(폴백) 모델 시도 여부 플래그
     fallback_attempted = False
 
+    # -------------------------------------------------------------------------
+    # ■ 중첩 함수(Nested Function)와 클로저(Closure)의 원리:
+    #   - '함수 안의 함수': 이 함수(generate_answer) 내부에서만 잠깐 쓰고 버릴 전용 미니 도우미
+    #   - 클로저(Closure)의 특징:
+    #     1) 매개변수가 없음: 바깥 함수의 로컬 변수(started, AI_TOTAL_TIMEOUT_SECONDS)를 그대로 '포획(Capture)'하여 기억함
+    #     2) 편리성: 매번 elapsed_ms(started)처럼 인자를 넘기지 않고 'elapsed_ms()' 호출만으로 현재 시간 실시간 계산
+    #     3) 캡슐화 및 중복 제거: 복잡한 수식(time.perf_counter() - started)을 여러 번 복붙하지 않고 깔끔하게 묶어 사용
+    # -------------------------------------------------------------------------
     # 현재 시점까지 경과된 총 시간을 밀리초(ms)로 반환하는 내부 클로저 함수
     def elapsed_ms() -> int:
         return int((time.perf_counter() - started) * 1000)

@@ -59,17 +59,23 @@ async def test_chat_releases_db_while_waiting_and_returns_saved_timestamp(databa
                     headers = auth_headers,
                 ), timeout=5)
                 assert response.status_code == 200
-                assert response.json() == []
+                row = response.json()[0]
+                assert (row["question"], row["status"], row["answer"]) == ("안녕", "processing", None)
+                chat_id = row["id"]
+                rooms = await client.get("/api/me/rooms", headers=auth_headers)
+                assert rooms.json() == [{"room_id": "room-a", "room_name": "Test room"}]
             finally:
                 release.set()
                 response = await pending
 
             assert response.status_code == 200
             body = response.json()
-            assert set(body) == {"room_id", "room_name", "answer", "request_id", "created_at"}
+            assert set(body) == {"id", "room_id", "room_name", "answer", "request_id", "created_at"}
+            assert body["id"] == chat_id
             assert body["created_at"].endswith("Z")
             with database() as db:
                 saved = db.query(ChatLog).one()
+                assert saved.id == chat_id
                 assert saved.answer == body["answer"]
                 assert saved.request_id == body["request_id"]
                 assert saved.created_at.replace(tzinfo=timezone.utc) == datetime.fromisoformat(body["created_at"])
@@ -157,7 +163,8 @@ async def test_history_failure_rolls_back_before_reusing_session(database, monke
             latency_ms = 1,
             answer     = "ok",
         )
-        await chat_db.save_result(db, "alice", "room-a", "Test room", "question", result)
+        chat_id, _ = await chat_db.save_question(db, "alice", "room-a", "Test room", "question", result.request_id)
+        await chat_db.save_result(db, chat_id, result)
         assert len(await chat_db.get_list_chat("alice", db)) == 1
 
 
@@ -174,7 +181,7 @@ def test_timeout_environment_names():
 
 
 @pytest.mark.anyio
-async def test_cancelled_request_releases_session_without_saving_failure(database, auth_headers, monkeypatch):
+async def test_cancelled_server_task_releases_session_and_records_failure(database, auth_headers, monkeypatch):
     started = asyncio.Event()
     sessions = []
 
@@ -211,9 +218,10 @@ async def test_cancelled_request_releases_session_without_saving_failure(databas
             assert not sessions[0].in_transaction()
             response = await client.get("/api/me/chats", headers=auth_headers)
             assert response.status_code == 200
-            assert response.json() == []
+            assert response.json()[0]["status"] == "error"
+            assert response.json()[0]["error_code"] == "INTERNAL_ERROR"
         with database() as db:
-            assert db.query(ChatLog).count() == 0
+            assert db.query(ChatLog).one().question == "cancelled"
     finally:
         app.dependency_overrides.pop(get_db, None)
 
@@ -225,3 +233,32 @@ async def test_lifespan_disposes_database(monkeypatch):
     async with main_module.lifespan(app):
         pass
     dispose.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_deleted_processing_room_is_not_recreated_by_late_answer(database, auth_headers, ai_mock):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def answer(**kwargs):
+        started.set()
+        await release.wait()
+        return AIResult(status="success", request_id=kwargs["request_id"], model="test", latency_ms=1, answer="late")
+
+    ai_mock.side_effect = answer
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        pending = asyncio.create_task(client.post("/api/chat", headers=auth_headers, json={
+            "room_id": "deleted-room", "room_name": "삭제할 방", "question": "처리 중 질문",
+        }))
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            response = await client.delete("/api/me/chats?room_id=deleted-room", headers=auth_headers)
+            assert response.json() == {"deleted": 1}
+        finally:
+            release.set()
+            response = await pending
+        assert response.status_code == 409
+        assert response.json()["error_code"] == "CHAT_CLOSED"
+        assert (await client.get("/api/me/rooms", headers=auth_headers)).json() == []
+        with database() as db:
+            assert db.query(ChatLog).count() == 0

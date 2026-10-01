@@ -47,15 +47,18 @@
 |---|---|
 | 요청 시작 | `get_db()`에서 세션 생성 |
 | 사용자·문맥·목록 조회 | 조회 완료 후 `commit()` |
-| AI 대기 | 문맥 조회 트랜잭션 종료 상태. DB 연결 점유 없음 |
-| 기록 저장 | `add()` 후 `commit()` |
+| 질문 접수 | `processing` 기록을 `add()` 후 `commit()` |
+| AI 대기 | 문맥 조회·질문 저장 트랜잭션 종료 상태. DB 연결 점유 없음 |
+| 결과 저장 | 기존 DB `id`의 처리 중 기록만 `UPDATE` 후 `commit()`. 삭제된 기록은 재생성하지 않음 |
 | DB 예외 | 해당 서비스에서 `rollback()` |
 | 요청 종료 | `get_db()` 컨텍스트 종료 시 세션 닫기 |
 | 앱 종료 | lifespan에서 `engine.dispose()` |
 
-사용자 확인은 ID, 문맥 조회는 질문·답변, 목록 조회는 응답에 필요한 여섯 컬럼만 선택한다.
+사용자 확인은 ID, 문맥 조회는 질문·답변, 목록 조회는 응답에 필요한 컬럼만 선택한다.
 문맥은 `user_id + room_id + status=success`로 제한하며, ID 내림차순으로 최근 기록을 조회한 뒤 시간순으로 AI에 전달한다.
 목록은 `created_at DESC, id DESC`로 반환한다.
+방 목록·기록 조회에는 처리 중·실패 기록을 포함한다. 생성 후 `AI_TOTAL_TIMEOUT_SECONDS + 30`초가 지난
+`processing`은 본인 목록·기록 조회 시 `error / INTERNAL_ERROR`로 종료한다.
 
 ### 1.4. 검증 및 실패 처리
 
@@ -88,9 +91,9 @@
 |---|---|
 | 가입·로그인 성공 | 성공 메시지 유지. 로그인 응답의 `token`, `token_type` 유지 |
 | 로그인 실패 | HTTP 200 대신 401 반환 |
-| 채팅 요청·성공 | 요청에 `room_id`, `room_name` 필수. HTTP 200 응답은 `room_id`, `room_name`, `answer`, `request_id`, `created_at`. 시각은 UTC `Z` 문자열 |
+| 채팅 요청·성공 | 요청에 `room_id`, `room_name` 필수. HTTP 200 응답은 `id`, `room_id`, `room_name`, `answer`, `request_id`, `created_at`. 시각은 질문 저장 시각의 UTC `Z` 문자열 |
 | 본인 기록 조회 | `{items, total}` 대신 전체 배열 반환. 페이지네이션 없음 |
-| 기록 항목 | `id`, `room_id`, `room_name`, `question`, `answer`, `status`, `created_at` |
+| 기록 항목 | `id`, `room_id`, `room_name`, `question`, `answer`, `status`, `error_code`, `created_at` |
 | 서비스·검증 오류 | `error_code`, `message`, `request_id`로 통일 |
 | 기본 HTTP 오류 | 404·405 등 프레임워크 응답의 `detail` 형식 유지 |
 | 요청 식별 | `X-Request-ID` 헤더 추가. 오류 응답·로그·채팅 기록에 동일 ID 사용 |
@@ -124,9 +127,9 @@ Uvicorn의 예외 로그는 필터에서 예외 종류와 발생 위치로 변�
 | `static/js/client.js` | JSON 요청, Authorization 헤더 구성, 30초 제한·취소, 공통 HTTP 오류 처리. GET 요청은 HTTP 캐시를 사용하지 않음 |
 | `static/js/auth-service.js`, `static/js/auth-ui.js` | 가입·로그인 통신과 토큰 처리, 인증 폼·상태 표시·만료 처리 |
 | `static/js/chat-service.js` | 질문 전송, 서버 방 목록·기록 조회·삭제, 방 메타데이터 저장 |
-| `static/js/chat-action.js` | 방 선택·기록 조회·질문 전송·삭제 상태 처리, 계정·방 전환 시 이전 조회 취소 |
+| `static/js/chat-action.js` | 방별 전송 상태·진행 기록 재조회·실패 후 재시도·삭제, 계정·방 전환 시 이전 조회 취소 |
 | `static/js/chat-room.js`, `static/js/chat-ui.js` | 방 목록·메시지 렌더링과 이벤트 연결 |
-| `templates/` | 변경 없음 |
+| `templates/` | 중지 버튼을 대기 중지로 표시 |
 
 `localStorage`에는 계정별 방 ID·이름만 저장하며, 대화 본문은 서버에서 조회한다.
 인증·채팅 API의 `fetch` 호출은 `client.js`의 `client()`로 통합한다. 서비스 모듈은 요청·응답 데이터를 처리하고,
@@ -134,7 +137,11 @@ Uvicorn의 예외 로그는 필터에서 예외 종류와 발생 위치로 변�
 토큰 처리는 `auth-service.js`, 인증 화면 갱신은 `auth-ui.js`에서 관리하며, 채팅은 요청 시작 시 확보한 토큰을 전달한다.
 방 이름은 프론트의 `title`을 `room_name`으로 전송하여 `chat_logs`의 각 기록에 저장하고, 성공 응답과 기록 조회에서 반환한다.
 기록의 `room_name`은 요청 당시 값이다. 방 이름 일괄 변경 기능은 없다.
-화면은 `/api/me/rooms`로 방 목록을 조회하고 `/api/me/chats?room_id=...`로 해당 방의 성공 기록을 복원한다.
+화면은 `/api/me/rooms`로 방 목록을 조회하고 `/api/me/chats?room_id=...`로 해당 방의 질문·답변·처리 상태를 복원한다.
+선택한 방은 URL의 `#room=...`으로 유지한다. 현재 방이 처리 중이고 POST 응답 대기가 끝난 상태면 2초 간격으로 기록을 재조회한다.
+대기 중지는 브라우저의 응답 대기·재조회만 중단한다. 서버에 접수된 질문은 계속 처리되며 방 재선택 시 다시 조회한다.
+화면에는 AI 오류·서버 오류를 구분해 표시한다. 실패 후 다시 시도는 실패 기록을 남긴 채 새 질문을 전송한다.
+추가 멱등성 키는 사용하지 않으며, 페이지 새로고침·방 전환·통신 오류로 질문을 자동 재전송하지 않는다.
 AI 문맥은 사용자·방별 기록 기준이다. 새 방에는 새 ID를 사용하며, 방 재선택·새로고침 후에도 저장된 ID를 유지한다.
 방 삭제는 서버에서 본인의 해당 방 기록 전체를 제거한 뒤 화면에 반영한다. 삭제 로그에는 사용자·방 ID와 건수를 남긴다.
 토큰 만료·401 처리 시 `authchange` 이벤트로 사용자 표시와 채팅 화면을 갱신한다.

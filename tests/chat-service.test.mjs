@@ -161,7 +161,7 @@ test('방 목록과 방별 기록은 인증된 GET 요청으로 매번 조회한
     assert.equal(options.headers.Authorization, 'Bearer token');
     return Response.json(url === '/api/me/rooms'
       ? [{ room_id: 'room / 한글', room_name: '제목' }]
-      : [{ question: '최근 질문', answer: '최근 답변' }, { question: '이전 질문', answer: '이전 답변' }]);
+      : [{ id: 2, status: 'success', question: '최근 질문', answer: '최근 답변' }, { id: 1, status: 'success', question: '이전 질문', answer: '이전 답변' }]);
   });
   assert.deepEqual(await request_rooms('token'), [{ id: 'room / 한글', title: '제목', messages: [] }]);
   const messages = await request_history('room / 한글', 'token');
@@ -180,6 +180,21 @@ test('방 삭제는 인증된 DELETE 요청으로 서버에 전달한다', async
     return Response.json({ deleted: 3 });
   });
   assert.equal((await request_delete_room('room-a', 'token')).data.deleted, 3);
+});
+
+test('처리 중·실패 기록의 질문을 보존하고 오류 안내를 두 종류로 표시한다', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json([
+    { id: 3, question: '진행 질문', status: 'processing', answer: null, error_code: null },
+    { id: 2, question: '서버 실패', status: 'error', answer: null, error_code: 'INTERNAL_ERROR' },
+    { id: 1, question: 'AI 실패', status: 'timeout', answer: null, error_code: 'AI_TIMEOUT' },
+  ]));
+  const messages = await request_history('room-a', 'token');
+  assert.deepEqual(messages.filter(row => row.role === 'user').map(row => row.text), ['AI 실패', '서버 실패', '진행 질문']);
+  assert.deepEqual(messages.filter(row => row.role === 'assistant').map(row => row.status), ['timeout', 'error', 'processing']);
+  assert.match(messages[1].text, /AI 응답/);
+  assert.match(messages[3].text, /서버 오류/);
+  assert.match(messages[5].text, /생성하고/);
+  assert.equal(messages[4].id, messages[5].id);
 });
 
 test('UUID API가 없어도 유효한 방 ID를 만든다', t => {

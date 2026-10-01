@@ -27,6 +27,8 @@ LOG_EVENTS = {
     "auth_password_verify_failed": (logging.ERROR,   ""),
     "auth_login_success"         : (logging.INFO,    ""),
     "chat_saved"                 : (logging.INFO,    "status=%(status)s"),
+    "chat_started"               : (logging.INFO,    "chat_id=%(chat_id)d"),
+    "chat_processing_expired"    : (logging.WARNING, "count=%(count)d"),
     "chat_save_failed"           : (logging.ERROR,   ""),
     "chat_list_loaded"           : (logging.INFO,    "count=%(count)d"),
     "chat_list_failed"           : (logging.ERROR,   ""),

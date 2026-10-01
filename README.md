@@ -40,10 +40,10 @@ docker compose up --build -d --wait
 |---|---|---|---|
 | POST | `/auth/register` | `{ "id": "...", "pw": "..." }` → 성공 메시지 | 없음 |
 | POST | `/auth/login` | 같은 요청 → `message`, `token`, `token_type` | 없음 |
-| POST | `/api/chat` | `{ "room_id": "...", "room_name": "...", "question": "..." }` → `room_id`, `room_name`, `answer`, `request_id`, `created_at` | Bearer 토큰 |
+| POST | `/api/chat` | `{ "room_id": "...", "room_name": "...", "question": "..." }` → `id`, `room_id`, `room_name`, `answer`, `request_id`, `created_at` | Bearer 토큰 |
 | GET | `/api/me/chats` | 본인 전체 기록 배열, 최신순 | Bearer 토큰 |
-| GET | `/api/me/rooms` | 완료된 대화가 있는 방의 `room_id`, `room_name` 배열, 최근 저장순 | Bearer 토큰 |
-| GET | `/api/me/chats?room_id=...` | 해당 방의 성공 기록 배열, 최신순 | Bearer 토큰 |
+| GET | `/api/me/rooms` | 질문이 저장된 방의 `room_id`, `room_name` 배열, 최근 저장순 | Bearer 토큰 |
+| GET | `/api/me/chats?room_id=...` | 해당 방의 처리 중·성공·실패 기록 배열, 최신순 | Bearer 토큰 |
 | DELETE | `/api/me/chats?room_id=...` | 본인의 해당 방 기록 전체 삭제 → `{ "deleted": 삭제 건수 }` | Bearer 토큰 |
 
 채팅 인증 헤더는 `Authorization: Bearer <로그인 응답의 token>`입니다.
@@ -58,6 +58,7 @@ docker compose up --build -d --wait
 
 ```json
 {
+  "id": 1,
   "room_id": "room-example",
   "room_name": "FastAPI란?",
   "answer": "FastAPI는 파이썬으로 API를 만드는 프레임워크입니다.",
@@ -66,10 +67,10 @@ docker compose up --build -d --wait
 }
 ```
 
-기록 조회는 `[{ "id": 1, "room_id": "room-example", "room_name": "FastAPI란?", "question": "...", "answer": "...", "status": "success", "created_at": "...Z" }]`
-형식입니다. 실패 기록의 `answer`는 `null`입니다. 페이지네이션과 `items`·`total` 래핑은 사용하지 않습니다.
-`room_id`를 지정하면 해당 방의 성공 기록만 반환합니다. 방 목록의 이름은 마지막 성공 기록을 기준으로 합니다.
-삭제는 성공·실패 여부에 관계없이 본인의 해당 방 기록 전체에 적용됩니다. 존재하지 않는 방은 `deleted: 0`을 반환합니다.
+기록 조회는 `[{ "id": 1, "room_id": "room-example", "room_name": "FastAPI란?", "question": "...", "answer": "...", "status": "success", "error_code": null, "created_at": "...Z" }]`
+형식입니다. `status`는 `processing`, `success`, `error`, `timeout`이며 처리 중·실패 기록의 `answer`는 `null`입니다.
+페이지네이션과 `items`·`total` 래핑은 사용하지 않습니다. `room_id`를 지정하면 해당 방만 조회하며, 방 이름은 마지막 질문 기록을 기준으로 합니다.
+삭제는 처리 상태와 관계없이 본인의 해당 방 기록 전체에 적용됩니다. 존재하지 않는 방은 `deleted: 0`을 반환합니다.
 삭제 후 `chat_room_deleted` 로그에 사용자 ID, 방 ID, 건수, 요청 ID를 남기며 질문·답변 본문은 기록하지 않습니다.
 
 인증·입력 검증·서비스 오류는 다음 형식으로 반환합니다. 같은 요청의 ID는 응답 헤더
@@ -82,7 +83,7 @@ docker compose up --build -d --wait
 | HTTP | 대표 오류 |
 |---|---|
 | 401 | `UNAUTHORIZED`: 로그인 실패, 토큰 누락·만료·위조, 존재하지 않는 사용자 |
-| 409 | `USER_ALREADY_EXISTS`: 중복 회원가입 |
+| 409 | `USER_ALREADY_EXISTS`: 중복 회원가입 / `CHAT_CLOSED`: 결과 저장 전에 이미 종료되거나 삭제된 대화 |
 | 422 | `INVALID_INPUT`: 요청 검증 실패 / `AI_BLOCKED`: AI 차단 |
 | 429 | `AI_RATE_LIMIT`: AI 요청 제한 |
 | 500 | `INTERNAL_ERROR`: 처리하지 못한 내부 오류 |
@@ -103,12 +104,16 @@ docker compose up --build -d --wait
   400으로 거부하므로, 남은 예산이 10초 미만이면 폴백 모델을 호출하지 않고 건너뜁니다.
 - AI가 `MAX_TOKENS`로 종료하면 부분 답변도 성공으로 반환하지 않습니다. 키 누락·키 인증·권한 오류와 함께 재시도·폴백 없이 실패 기록을 저장하고 설정 확인 안내를 반환합니다.
 - 인증·입력 검증 실패는 AI를 호출하거나 채팅 기록을 만들지 않습니다. DB 저장 실패는 503입니다.
+- 검증을 통과한 질문은 AI 호출 전에 `processing`으로 저장·커밋하며, 완료 시 같은 DB `id`의 답변·상태를 갱신합니다. `created_at`은 질문 저장 시각입니다.
+- 서버 작업 취소는 `error`로 기록합니다. 서버 강제 종료·결과 저장 실패로 남은 `processing`은 생성 후 `AI_TOTAL_TIMEOUT_SECONDS + 30`초가 지난 뒤 본인 목록·기록 조회 시 `error / INTERNAL_ERROR`로 종료합니다. 중단된 AI 작업을 자동 재실행하지 않습니다.
 - DB 시각은 UTC이며 API에서는 `Z`를 붙여 반환합니다.
 - AI 문맥은 **같은 사용자·같은 방의 최근 성공 대화**입니다. 기본 5턴에서 길이에 따라 오래된 대화를 더 제외합니다.
-- 로그인·새로고침·답변 완료 시 서버에서 방 목록을 갱신하고, 방 선택·답변 완료 시 해당 방의 성공 기록을 조회합니다. 다른 브라우저에서도 같은 계정의 기록을 복원합니다.
+- 로그인·새로고침·답변 완료 시 서버에서 방 목록을 갱신하고, 방 선택·답변 완료 시 해당 방의 모든 처리 상태를 조회합니다. 다른 브라우저에서도 같은 계정의 기록을 복원합니다.
+- 선택한 방은 URL의 `#room=...`으로 복원합니다. 서버에 접수된 질문은 페이지 새로고침·방 전환 이후에도 처리되며, 현재 방이 처리 중이고 기존 POST 응답을 기다리는 상태가 아니면 2초 간격으로 기록을 조회합니다. 완료·실패·방 전환·로그아웃 시 해당 조회를 중단합니다.
 - `localStorage`에는 계정별 방 ID·이름만 최근 30개까지 보관합니다. 서버에서 받은 방 목록 전체는 화면에 표시하며 질문·답변은 브라우저 저장소에 저장하지 않습니다. 이전 형식의 본문은 해당 계정의 저장 목록을 읽을 때 제거합니다.
 - 방 삭제는 DB 기록 삭제 성공 후 화면에 반영합니다. 다른 브라우저에는 다음 목록·기록 조회 시 반영됩니다.
-- 중지 버튼은 브라우저의 응답 대기를 취소하며 서버 처리 취소까지 보장하지 않습니다. 진행 중 요청 복원과 중복 전송 방지는 아직 구현하지 않았습니다.
+- 대기 중지는 브라우저의 응답 대기·상태 조회만 멈춥니다. 서버 처리는 유지하며 방 재선택 시 상태를 다시 조회합니다. 실패한 질문은 기록에 남고, 화면에서는 AI 오류와 서버 오류로 구분해 표시합니다.
+- 질문을 자동 재전송하지 않습니다. 실패 기록의 다시 시도는 새 질문 기록을 만들며, 동일 POST의 중복 접수를 막는 멱등성 키는 사용하지 않습니다.
 - 방 이름은 각 대화 기록에 요청 당시 값으로 저장합니다. 방 이름 변경 API는 구현하지 않았습니다.
 - JWT 만료 또는 채팅 요청의 401 응답 시 토큰을 정리하고 화면을 비로그인 상태로 갱신합니다. AI 오류인 502·503 응답은 로그인 상태를 유지합니다.
 

@@ -82,6 +82,7 @@ class ErrorCode:
     DB_UNAVAILABLE   = "DB_UNAVAILABLE"
     AUTH_UNAVAILABLE = "AUTH_UNAVAILABLE"
     INTERNAL         = "INTERNAL_ERROR"
+    CHAT_CLOSED      = "CHAT_CLOSED"
 
 
 USER_MESSAGES: dict[str, str] = {

@@ -18,19 +18,29 @@ export const request_chat = (question, room_id, room_name, token, signal) => cli
     '/api/chat', { question, room_id, room_name }, { token, signal, errors }
 )
 
-// 완료된 대화가 있는 방 목록을 서버에서 불러온다.
+// 질문이 저장된 방 목록을 서버에서 불러온다.
 export const request_rooms = async (token, signal) => {
     const { data } = await client('/api/me/rooms', undefined, { method: 'GET', token, signal, errors })
     return data.map(room => ({ id: room.room_id, title: room.room_name, messages: [] }))
 }
 
-// 선택한 방의 완료된 대화를 오래된 순서로 불러온다.
+// AI 오류와 서버 오류를 구분해 안내한다.
+export const chatError = code => code?.startsWith('AI_')
+    ? 'AI 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.'
+    : '서버 오류로 답변을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+
+// 선택한 방의 질문·답변·처리 상태를 오래된 순서로 불러온다.
 export const request_history = async (room_id, token, signal) => {
     const { data } = await client(`/api/me/chats?room_id=${encodeURIComponent(room_id)}`, undefined, {
         method: 'GET', token, signal, errors,
     })
     return data.reverse().flatMap(row => [
-        { role: 'user', text: row.question }, { role: 'assistant', text: row.answer },
+        { id: row.id, role: 'user', text: row.question },
+        {
+            id: row.id, role: 'assistant', status: row.status,
+            text: row.status === 'processing' ? '답변을 생성하고 있습니다…'
+                : row.status === 'success' ? row.answer : chatError(row.error_code),
+        },
     ])
 }
 

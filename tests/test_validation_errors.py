@@ -169,6 +169,7 @@ def test_save_failure_returns_503_and_rolls_back(client, database, auth_headers,
     assert response.json()["error_code"] == "DB_UNAVAILABLE"
     assert response.json()["request_id"]
     assert "private-sql" not in response.text
+    ai_mock.assert_not_called()
     with database() as db:
         assert db.query(ChatLog).count() == 0
 
@@ -176,12 +177,28 @@ def test_save_failure_returns_503_and_rolls_back(client, database, auth_headers,
 def test_history_error_and_response_contract(client, auth_headers, ai_mock, monkeypatch):
     assert client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "hi"}, headers=auth_headers).status_code == 200
     item = client.get("/api/me/chats", headers=auth_headers).json()[0]
-    assert set(item) == {"id", "room_id", "room_name", "question", "answer", "status", "created_at"}
+    assert set(item) == {"id", "room_id", "room_name", "question", "answer", "status", "error_code", "created_at"}
     assert item["created_at"].endswith("Z")
     monkeypatch.setattr(AsyncSession, "execute", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
     response = client.get("/api/me/chats", headers=auth_headers)
     assert response.status_code == 503
     assert response.json()["error_code"] == "DB_UNAVAILABLE"
+
+
+def test_result_save_failure_preserves_the_accepted_question(client, database, auth_headers, ai_mock, monkeypatch):
+    async def answer(**kwargs):
+        monkeypatch.setattr(AsyncSession, "commit", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
+        return AIResult(status="success", request_id=kwargs["request_id"], model="test", latency_ms=1, answer="answer")
+
+    ai_mock.side_effect = answer
+    response = client.post("/api/chat", headers=auth_headers, json={
+        "room_id": "room-a", "room_name": "Test room", "question": "accepted",
+    })
+    assert response.status_code == 503
+    assert "private-sql" not in response.text
+    with database() as db:
+        row = db.query(ChatLog).one()
+        assert (row.question, row.status, row.answer) == ("accepted", "processing", None)
 
 
 @pytest.mark.parametrize("payload", [

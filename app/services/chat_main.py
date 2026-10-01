@@ -18,7 +18,9 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
     question   = validate_question(data)
     request_id = request_id_context.get() or uuid4().hex
     history    = await chat_db.get_history(user_id, room_id, db)
+    chat_id, created_at = await chat_db.save_question(db, user_id, room_id, room_name, question, request_id)
     started    = time.perf_counter()
+    cancelled  = False
 
     try:
         result = await asyncio.wait_for(
@@ -31,29 +33,26 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
             timeout = config.AI_TOTAL_TIMEOUT_SECONDS,
         )
         if not isinstance(result, AIResult): raise TypeError("Invalid AI result")
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         log_event("chat_ai_failed", exc=exc, request_id=request_id)
+        cancelled = isinstance(exc, asyncio.CancelledError)
         code   = ErrorCode.TIMEOUT if isinstance(exc, TimeoutError) else ErrorCode.UNKNOWN
+        if cancelled: code = ErrorCode.INTERNAL
         result = AIResult(
             status       = "timeout" if code == ErrorCode.TIMEOUT else "error",
             request_id   = request_id,
             model        = config.AI_MODEL,
             latency_ms   = int((time.perf_counter() - started) * 1000),
             error_code   = code,
-            user_message = USER_MESSAGES[code],
+            user_message = USER_MESSAGES.get(code, "서버 오류로 답변을 완료하지 못했습니다."),
         )
 
     result.request_id = request_id
     validate_result(result)
 
-    created_at = await chat_db.save_result(
-        db        = db,
-        user_id   = user_id,
-        room_id   = room_id,
-        room_name = room_name,
-        question  = question,
-        result    = result,
-    )
+    saved = await chat_db.save_result(db, chat_id, result)
+    if cancelled: raise asyncio.CancelledError
+    if not saved: raise APIError(409, ErrorCode.CHAT_CLOSED, "이미 종료되거나 삭제된 대화입니다.")
 
     if result.status != "success":
         raise APIError(
@@ -64,6 +63,7 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
         )
 
     return {
+        "id"         : chat_id,
         "room_id"    : room_id,
         "room_name"  : room_name,
         "answer"     : result.answer,
@@ -130,6 +130,7 @@ async def get_my_chat(user_id: str, db: AsyncSession, room_id: str | None = None
             "question"   : row.question,
             "answer"     : row.answer,
             "status"     : row.status,
+            "error_code" : row.error_code,
             "created_at" : row.created_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
         }
         for row in rows

@@ -1,4 +1,5 @@
 """RUN_BROWSER_TESTS=1일 때 로컬 브라우저로 실제 UI → API → 테스트 DB를 확인한다."""
+import asyncio
 import os
 import socket
 import threading
@@ -12,7 +13,7 @@ import pytest
 import uvicorn
 
 from app.main           import app
-from app.core.errors    import ErrorCode, USER_MESSAGES
+from app.core.errors    import ErrorCode
 from app.models.chatlog import ChatLog
 from app.models.login   import Login
 from app.schemas.chat   import AIResult
@@ -227,14 +228,17 @@ def test_chat_retry_preserves_rooms_and_renders_plain_text(browser_page, databas
     page.locator(".question").fill("재시도할 질문")
     page.locator(".send-button").click()
     expect(page.locator(".retry")).to_be_visible()
-    expect(page.locator(".request-id")).to_be_visible()
-    expect(page.locator(".history-count")).to_have_text("30")
-    expect(page.locator(".message")).to_have_count(0)
-    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice'))") == list(reversed(rooms))
+    expect(page.locator(".request-id")).to_be_hidden()
+    expect(page.locator(".history-count")).to_have_text("31")
+    expect(page.locator(".message.user .message-text")).to_have_text("재시도할 질문")
+    expect(page.locator('.message.assistant[data-state="timeout"]')).to_have_count(1)
+    page.reload()
+    expect(page.locator('.message.assistant[data-state="timeout"]')).to_have_count(1)
 
     page.locator(".retry").click()
-    expect(page.locator(".message.assistant .message-text")).to_have_text(answer)
-    expect(page.locator(".message.user .copy-button")).to_be_hidden()
+    success = page.locator('.message.assistant[data-state="success"]')
+    expect(success.locator(".message-text")).to_have_text(answer)
+    expect(page.locator(".message.user .copy-button").first).to_be_hidden()
     expect(page.locator(".message img")).to_have_count(0)
     expect(page.locator(".question")).to_have_value("")
     expect(page.locator(".history-count")).to_have_text("31")
@@ -243,50 +247,162 @@ def test_chat_retry_preserves_rooms_and_renders_plain_text(browser_page, databas
     assert saved[0]["id"] == requests[0]["room_id"]
     assert saved[1:] == list(reversed(rooms))[:29]
     assert all(set(room) == {"id", "title"} for room in saved)
+    with database() as db:
+        rows = db.query(ChatLog).filter_by(room_id=requests[0]["room_id"]).order_by(ChatLog.id).all()
+        assert [row.status for row in rows] == ["timeout", "success"]
 
     page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {
         configurable: true, value: { writeText: async text => { window.copiedText = text; } }
     })""")
-    page.locator(".message.assistant .copy-button").click()
+    success.locator(".copy-button").click()
     expect(page.locator(".toast")).to_have_text("답변을 복사했습니다.")
     assert page.evaluate("window.copiedText") == answer
     page.evaluate("() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })")
-    page.locator(".message.assistant .copy-button").click()
+    success.locator(".copy-button").click()
     expect(page.locator(".fallback-copy")).to_have_value(answer)
     assert page.locator(".fallback-copy").evaluate("area => area.selectionEnd - area.selectionStart") == len(answer)
 
 
-@pytest.mark.parametrize("action", ["stop", "account-change"])
-def test_chat_pending_request_is_cancelled_without_saving(browser_page, action):
+@pytest.fixture
+def slow_ai(browser_page, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    async def answer(question, **kwargs):
+        calls.append(question)
+        started.set()
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+        return AIResult(status="success", answer="완료된 답변", request_id=kwargs["request_id"], model="test", latency_ms=1)
+
+    monkeypatch.setattr(AI_connect, "generate_answer", answer)
+    try:
+        yield started, release, calls
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("action", ["reload", "stop", "account-change", "client-timeout"])
+def test_processing_survives_browser_disconnect_and_finishes_once(browser_page, database, slow_ai, action):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    started, release, calls = slow_ai
+    if action == "client-timeout":
+        page.clock.install()
+    token = security.create_token("alice")
+    set_browser_token(page, token)
+    page.locator(".question").fill("처리 중 질문")
+    page.locator(".send-button").click()
+    assert started.wait(5)
+    with database() as db:
+        row = db.query(ChatLog).one()
+        chat_id, room_id = row.id, row.room_id
+        assert (row.status, row.answer) == ("processing", None)
+    expect(page.locator(".question")).to_be_disabled()
+    expect(page.locator(".delete-chat")).to_be_disabled()
+    expect(page.locator(".history-item")).to_be_enabled()
+
+    if action == "reload":
+        page.reload()
+    elif action == "stop":
+        page.locator(".stop-button").click()
+        expect(page.locator(".status")).to_contain_text("중지")
+        expect(page.locator(".message.user .message-text")).to_have_text("처리 중 질문")
+        page.locator(".history-item").click()
+    elif action == "account-change":
+        set_browser_token(page, security.create_token("bob"))
+        expect(page.locator(".header-user")).to_have_text("bob")
+        expect(page.locator(".message")).to_have_count(0)
+        expect(page.locator(".history-count")).to_have_text("0")
+        set_browser_token(page, token)
+        page.locator(".history-item").click()
+    else:
+        page.clock.fast_forward(30_001)
+
+    expect(page.locator('.message.assistant[data-state="processing"]')).to_have_count(1)
+    expect(page.locator(".status")).to_contain_text("생성하고")
+    expect(page.locator(".retry")).to_be_hidden()
+    release.set()
+    expect(page.locator('.message.assistant[data-state="success"] .message-text')).to_have_text("완료된 답변", timeout=10_000)
+    expect(page.locator(".question")).to_be_enabled()
+    expect(page.locator('.message[data-state="processing"]')).to_have_count(0)
+    assert calls == ["처리 중 질문"]
+    with database() as db:
+        row = db.query(ChatLog).one()
+        assert (row.id, row.room_id, row.status, row.answer) == (chat_id, room_id, "success", "완료된 답변")
+    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice'))") == [{"id": room_id, "title": "처리 중 질문"}]
+
+
+def test_late_answer_does_not_change_another_room(browser_page, database, slow_ai):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    started, release, calls = slow_ai
+    seed_rooms(database, [{"id": "other-room", "title": "다른 방"}])
+    set_browser_token(page, security.create_token("alice"))
+    page.locator(".question").fill("오래 걸리는 질문")
+    page.locator(".send-button").click()
+    assert started.wait(5)
+    page.locator('[data-room="other-room"]').click()
+    expect(page.locator(".message.assistant .message-text")).to_have_text("이전 답변")
+    with page.expect_response("**/api/chat"):
+        release.set()
+    expect(page.locator(".conversation-title")).to_have_text("다른 방")
+    expect(page.locator(".message.assistant .message-text")).to_have_text("이전 답변")
+    page.locator(".history-item").filter(has_text="오래 걸리는 질문").click()
+    expect(page.locator('.message.assistant[data-state="success"] .message-text')).to_have_text("완료된 답변")
+    assert calls == ["오래 걸리는 질문"]
+
+
+def test_lost_success_response_is_recovered_without_resending(browser_page, database, ai_mock):
     from playwright.sync_api import expect
 
     page = browser_page
     set_browser_token(page, security.create_token("alice"))
-    page.route("**/api/chat", lambda route: None)
-    page.locator(".question").fill("취소할 질문")
+
+    def lose_response(route):
+        assert route.fetch().status == 200
+        route.abort("failed")
+
+    page.route("**/api/chat", lose_response)
+    page.locator(".question").fill("응답 유실 질문")
+    page.locator(".send-button").click()
+    expect(page.locator('.message.assistant[data-state="success"] .message-text')).to_have_text("테스트 답변")
+    expect(page.locator(".status")).to_have_text("")
+    expect(page.locator(".question")).to_have_value("")
+    ai_mock.assert_awaited_once()
+    with database() as db:
+        assert db.query(ChatLog).one().status == "success"
+
+
+def test_new_room_can_send_while_another_room_is_processing(browser_page, database, slow_ai):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    started, release, calls = slow_ai
+    set_browser_token(page, security.create_token("alice"))
+    page.locator(".question").fill("첫 번째 방 질문")
+    page.locator(".send-button").click()
+    assert started.wait(5)
+    first_room = page.locator(".history-item.active").get_attribute("data-room")
+    page.locator("[data-new]").first.click()
+    page.locator(".question").fill("두 번째 방 질문")
     with page.expect_request("**/api/chat"):
         page.locator(".send-button").click()
-    expect(page.locator(".question")).to_be_disabled()
-    expect(page.locator(".delete-chat")).to_be_disabled()
-    page.locator(".history-search").fill("취소")
-    expect(page.locator(".history-item")).to_be_disabled()
-
-    with page.expect_event("requestfailed", predicate=lambda request: "/api/chat" in request.url):
-        if action == "stop":
-            page.locator(".stop-button").click()
-        else:
-            set_browser_token(page, security.create_token("bob"))
-    expect(page.locator(".question")).to_be_enabled()
-    expect(page.locator(".message")).to_have_count(0)
-    expect(page.locator(".history-count")).to_have_text("0")
-    if action == "stop":
-        expect(page.locator(".status")).to_contain_text("중지")
-        expect(page.locator(".question")).to_have_value("취소할 질문")
-    else:
-        expect(page.locator(".header-user")).to_have_text("bob")
-        expect(page.locator(".question")).to_have_value("")
-    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice') || '[]')") == []
-    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:bob') || '[]')") == []
+    expect(page.locator(".history-count")).to_have_text("2")
+    release.set()
+    expect(page.locator('.message.assistant[data-state="success"] .message-text')).to_have_text("완료된 답변")
+    expect(page.locator(".message.user .message-text")).to_have_text("두 번째 방 질문")
+    page.locator('[data-room="' + first_room + '"]').click()
+    expect(page.locator(".message.user .message-text")).to_have_text("첫 번째 방 질문")
+    expect(page.locator('.message.assistant[data-state="success"] .message-text')).to_have_text("완료된 답변")
+    assert calls == ["첫 번째 방 질문", "두 번째 방 질문"]
+    with database() as db:
+        rows = db.query(ChatLog).all()
+        assert len(rows) == len({row.room_id for row in rows}) == 2
+        assert all(row.status == "success" for row in rows)
 
 
 @pytest.mark.parametrize("next_user", ["alice", "bob"])
@@ -549,7 +665,7 @@ def test_ai_setting_errors_keep_login_and_save_failure(browser_page, database, m
         page.locator("#send").click()
     assert reply.value.status == http
     assert reply.value.json()["error_code"] == code
-    expect(page.locator("#status")).to_have_text(USER_MESSAGES[code])
+    expect(page.locator("#status")).to_have_text("AI 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.")
     expect(page.locator("#header-user")).to_have_text("alice")
     assert page.evaluate("localStorage.getItem('access_token')") == token
     call.assert_awaited_once()

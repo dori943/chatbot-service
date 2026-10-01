@@ -1,4 +1,4 @@
-from datetime               import datetime
+from datetime               import datetime, timedelta, timezone
 from uuid                   import uuid4
 from unittest.mock          import AsyncMock
 
@@ -7,6 +7,7 @@ from sqlalchemy.exc         import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chatlog     import ChatLog
+from app.core               import config
 from app.utils              import security
 
 
@@ -134,11 +135,12 @@ def test_room_list_history_and_delete_are_owned(client, database, auth_headers):
     rooms = client.get("/api/me/rooms?user_id=bob", headers=auth_headers)
     assert rooms.status_code == 200
     assert rooms.json() == [
-        {"room_id": "room-a", "room_name": "최근 이름"},
+        {"room_id": "failed-room", "room_name": "실패한 방"},
+        {"room_id": "room-a", "room_name": "실패 요청 이름"},
         {"room_id": "room-b", "room_name": "다른 방"},
     ]
     rows = client.get("/api/me/chats?room_id=room-a&user_id=bob", headers=auth_headers).json()
-    assert [row["question"] for row in rows] == ["second", "first"]
+    assert [row["question"] for row in rows] == ["failed", "second", "first"]
     assert client.get("/api/me/chats?room_id=missing", headers=auth_headers).json() == []
 
     response = client.delete("/api/me/chats?room_id=room-a&user_id=bob", headers=auth_headers)
@@ -169,3 +171,26 @@ def test_room_database_errors_are_reported(client, auth_headers, monkeypatch, me
     assert response.json()["error_code"] == "DB_UNAVAILABLE"
     assert "private-sql" not in response.text
     rollback.assert_awaited()
+
+
+@pytest.mark.parametrize("path", ["/api/me/chats?room_id=old", "/api/me/rooms"])
+def test_abandoned_processing_expires_only_for_current_user(client, database, auth_headers, ai_mock, path):
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with database() as db:
+        for user, room, status, created_at in [
+            ("alice", "old", "processing", now - timedelta(seconds=config.AI_TOTAL_TIMEOUT_SECONDS + 31)),
+            ("alice", "current", "processing", now),
+            ("alice", "done", "success", now - timedelta(days=1)),
+            ("bob", "old", "processing", now - timedelta(days=1)),
+        ]:
+            db.add(ChatLog(user_id=user, room_id=room, room_name=room, question="question",
+                           status=status, request_id=uuid4().hex, created_at=created_at))
+        db.commit()
+    assert client.get(path, headers=auth_headers).status_code == 200
+    with database() as db:
+        row = db.query(ChatLog).filter_by(user_id="alice", room_id="old").one()
+        assert (row.status, row.error_code) == ("error", "INTERNAL_ERROR")
+        assert db.query(ChatLog).filter_by(user_id="alice", room_id="current").one().status == "processing"
+        assert db.query(ChatLog).filter_by(user_id="alice", room_id="done").one().status == "success"
+        assert db.query(ChatLog).filter_by(user_id="bob").one().status == "processing"
+    ai_mock.assert_not_called()

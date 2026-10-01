@@ -406,16 +406,19 @@ h1 em {
   margin: 8px 0
 }
 
-.status[data-state="loading"] {
+.status[data-state="loading"],
+.message[data-state="processing"] .message-text {
   display: flex;
   align-items: center;
   gap: 8px
 }
 
-.status[data-state="loading"]::before {
+.status[data-state="loading"]::before,
+.message[data-state="processing"] .message-text::before {
   content: "";
   width: 12px;
   height: 12px;
+  flex-shrink: 0;
   border: 2px solid var(--line);
   border-top-color: var(--accent);
   border-radius: 50%;

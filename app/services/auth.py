@@ -47,6 +47,10 @@ async def check_user(user_id: str, db: AsyncSession) -> bool:
 #    - Bcrypt 알고리즘은 내부 구조상 비밀번호를 최대 72바이트까지만 키로 사용함
 #    - 72바이트를 초과하는 뒷부분은 조용히 잘려나가 무시되므로, 의도치 않은 해시 충돌 취약점 발생 가능
 #    - 이를 방지하기 위해 UTF-8 바이트 기준으로 72바이트 초과 입력을 사전에 엄격히 차단(HTTP 422)
+# 4) Fail-Fast (즉각 실패) 아키텍처:
+#    - boolean 반환 대신 함수 내부에서 즉시 raise APIError(422)를 발생시킴
+#    - 호출하는 쪽(register, login)에서 매번 if not validate_auth() 중복 코드를 작성할 필요 없이
+#      호출부 코드를 단 1줄로 슬림화하고, 유효하지 않은 입력의 다음 로직 진행을 원천 차단
 # ==============================================================================
 # 회원가입 및 로그인 DTO 데이터(data)의 유효성을 검사하는 검증 함수
 def validate_auth(data: AuthRequest):
@@ -116,12 +120,16 @@ async def register(data: AuthRequest, db: AsyncSession):
 # 유저 자격증명을 검증하고 세션 접근용 JWT 액세스 토큰을 발급
 # 1) 필수 검증: validate_auth() 호출 및 서버 측 JWT 서명 키(SECRET_KEY) 주입 여부 확인
 # 2) 고속 유저 엔티티 조회: SQLAlchemy의 PK 전용 최적화 메서드인 db.get() 사용
-# 3) 단락 평가(Short-Circuit) 및 CPU 블로킹 방어:
-#    - user is not None 검사를 선행하여 유저가 없으면 무거운 verify_password 연산을 아예 생략
-#    - verify_password 역시 CPU-bound 작업이므로 run_in_threadpool을 통해 비동기 이벤트 루프 보호
-# 4) 사용자 열거(User Enumeration) 공격 방어:
-#    - 아이디 부재와 비밀번호 불일치를 구분하지 않고 동일한 401 UNAUTHORIZED 에러 및 메시지 반환
-#    - 공격자가 특정 아이디의 가입 여부를 외부에서 유추할 수 없도록 정보 노출 차단
+# 3) 왜 try 블록이 2개로 분리되어 있는가? (트랜잭션 격리 및 책임 분리):
+#    - [1차 try: DB I/O 장애]: 실패 시 반드시 세션 롤백(await db.rollback())이 필요하며 503(DB_UNAVAILABLE) 처리
+#    - [2차 try: 해시 포맷 파손]: Bcrypt C 라이브러리의 ValueError 처리로 롤백이 불필요하며 503(AUTH_UNAVAILABLE) 처리
+#    - 둘을 하나의 try로 합치면 불필요한 DB 롤백이 돌거나 장애 원인이 혼탁해지므로 스코프를 최소화하여 분리
+# 4) 단락 평가(Short-Circuit) vs 얼리 리턴(Early Return) 아키텍처:
+#    - [현재 코드]: user is not None and await run_in_threadpool(...)
+#      단락 평가로 유저 부재 시 해시 연산을 생략하고, 401 에러 발생 지점을 단 하나로 강제 일원화하여
+#      개발자 실수로 인한 사용자 열거(User Enumeration) 보안 취약점 발생을 원천 차단
+#    - [얼리 리턴 수용 방안]: 만약 팀 컨벤션이 가드 절(Guard Clause)을 중시한다면
+#      'if user is None: raise 401'로 얼리 리턴하도록 유연하게 리팩토링 가능 (단, 동일한 401 메시지 유지 필수)
 # 5) JWT 발급: 검증 통과 시 유효기간(60분)이 포함된 Bearer 토큰 생성 및 반환
 # ==============================================================================
 # 유저 자격증명을 확인하고 JWT 액세스 토큰을 반환하는 비동기 함수

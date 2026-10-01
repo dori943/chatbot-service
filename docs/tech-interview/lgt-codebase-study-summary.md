@@ -1,4 +1,4 @@
-# 챗봇 서비스 코드 분석 및 학습 요약 (v1.4)
+# 챗봇 서비스 코드 분석 및 학습 요약 (v1.5)
 
 본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인, AI 연동, DB 영속화, 자료구조 최적화)을 분석한 내용을 체계적으로 정리한 문서입니다.
 
@@ -100,6 +100,37 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
    - 현재 사용자의 전체 대화 기록을 최신순(`created_at.desc()`, `id.desc()`)으로 조회.
    - UI에 필요한 컬럼만 최적화하여 프로젝션(`select(...)`)하고, 조회 트랜잭션 완료 후 즉시 커밋(`await db.commit()`)하여 커넥션을 풀에 조기 반환.
 
+### 8단계: 인증 및 보안 라이프사이클 (`app/routers/auth.py`, `app/services/auth.py`, `app/utils/security.py`, `app/core/dependencies.py`, `app/db.py`)
+채팅 API 접근의 전제 조건인 사용자 계정 관리, 자격증명 검증, 세션 상태 및 보안 파이프라인을 전담합니다:
+1. **인증 라우터 (`app/routers/auth.py`)**:
+   - `POST /auth/register` 및 `POST /auth/login` 엔드포인트 제공.
+   - Pydantic DTO(`AuthRequest`)를 통한 1차 형식 검증 및 `Depends(get_db)` 비동기 세션 의존성 주입 후 Service 계층으로 위임.
+2. **인증 서비스 비즈니스 로직 (`app/services/auth.py`)**:
+   - **`validate_auth`**: 아이디 공백 제거, 아이디 50자 제한(`VARCHAR(50)` 준수), 그리고 **Bcrypt의 72바이트 절삭 한계(Truncation Limit)**를 방어하기 위해 UTF-8 기준 72바이트 초과 비밀번호를 사전에 엄격히 차단(HTTP 422).
+   - **`register` (회원가입)**:
+     - CPU 연산 집약적인 비밀번호 해싱을 `await run_in_threadpool(hash_password, data.pw)`로 비동기 이벤트 루프에서 격리하여 서버 멈춤 방지.
+     - DB INSERT 중 `IntegrityError` 발생 시 MySQL 고유 에러 코드 `ER.DUP_ENTRY(1062)`를 판정하여 중복 계정 가입 시 HTTP 409 Conflict(`ErrorCode.USER_EXISTS`)로 정밀 변환.
+   - **`login` (로그인 및 토큰 발급)**:
+     - SQLAlchemy PK 전용 최적화 메서드 `db.get(Login, data.id)`로 유저 조회.
+     - **단락 평가(Short-Circuit)**와 `run_in_threadpool(verify_password)`를 결합하여 유저 부재 시 무거운 비밀번호 연산을 즉시 생략하고 이벤트 루프 보호.
+     - **사용자 열거(User Enumeration) 공격 방어**: 아이디 부재와 비밀번호 불일치를 구분하지 않고 동일한 HTTP 401 UNAUTHORIZED 에러 반환.
+     - 검증 성공 시 60분 유효기간을 가진 JWT 액세스 토큰 발급.
+   - **`check_user` (유저 실존 검증)**:
+     - 토큰 검증 필터에서 호출되며, `select(Login.id)` PK 단일 컬럼만 프로젝션하여 인덱스 스캔을 최소화하고 유저 실존 여부 확인.
+3. **보안 유틸리티 (`app/utils/security.py`)**:
+   - `hash_password`: `bcrypt.gensalt()`(Cost Factor 12)를 적용한 단방향 암호화로 레인보우 테이블 공격 무력화.
+   - `verify_password`: `bcrypt.checkpw` 기반의 상수 시간 비교(Constant-Time Comparison)로 타이밍 공격 방어.
+   - `create_token`: UTC 기준 만료 시간(`exp`)과 유저 식별자(`id`)를 담아 HS256 알고리즘과 `SECRET_KEY`로 전자 서명된 JWT 토큰 생성.
+4. **토큰 인증 의존성 (`app/core/dependencies.py` - `get_token_id`)**:
+   - `HTTPBearer(auto_error=False)`로 Authorization 헤더를 수신하여 누락 시 표준 401 포맷 반환.
+   - `jwt.decode`로 서명 위변조 및 만료 일시 검증.
+   - **무상태(Stateless) JWT의 한계 극복**: 토큰 자체의 서명이 유효하더라도 `await auth.check_user(user_id, db)`를 통해 실제 DB에 계정이 실존하는지 실시간 재확인하여 탈퇴/정지 유저의 토큰 재사용(Replay) 공격을 원천 차단.
+5. **비동기 DB 커넥션 풀 및 세션 관리 (`app/db.py`)**:
+   - `drivername="mysql+aiomysql"`, `charset="utf8mb4"` (이모지 및 다국어 지원).
+   - `create_async_engine(..., pool_pre_ping=True)`: 비관적 연결 끊김 감지로 MySQL 2006/2013 끊김 장애 예방.
+   - `async_sessionmaker(autoflush=False, expire_on_commit=False)`: 커밋 후 속성 만료를 방지하여 비동기 환경의 `MissingGreenlet` 에러 원천 차단.
+   - `get_db`: FastAPI 요청마다 세션을 열고 응답 후 커넥션 풀로 안전하게 반환하는 비동기 제너레이터.
+
 ---
 
 ## 2. 아키텍처 및 자료구조 핵심 인사이트
@@ -107,9 +138,9 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
    - `Jinja2`를 활용하여 파이썬 단일 서버 내에서 프론트엔드 정적 리소스 서빙과 백엔드 REST API를 모두 처리하여 배포 및 인프라 복잡도를 최소화.
 2. **관심사의 완벽한 분리 (Separation of Concerns)**:
    - **Presentation/Router (`app/routers`)**: HTTP 요청 수신, DTO 검증, 의존성 주입.
-   - **Service/Orchestration (`app/services/chat_main.py`)**: 비즈니스 흐름 제어, 타임아웃 제어, 트랜잭션 조율.
+   - **Service/Orchestration (`app/services/chat_main.py`, `app/services/auth.py`)**: 비즈니스 흐름 제어, 타임아웃 제어, 트랜잭션 조율.
    - **External Integration (`app/services/AI_connect.py`)**: LLM 연동, 토큰/프롬프트 빌딩, 재시도/폴백.
-   - **Persistence (`app/services/chat_db.py`)**: 데이터베이스 쿼리 및 데이터 영속화.
+   - **Persistence (`app/services/chat_db.py`, `app/db.py`)**: 데이터베이스 쿼리 및 데이터 영속화.
 3. **자료구조 관점의 데이터 흐름 (스택 vs 큐)**:
    - **스택(Stack, LIFO) ➔ `chat_db.get_history`**: DB에서 가장 마지막에 추가된 최신 N건을 `DESC LIMIT`으로 꺼낸 후, 파이썬 메모리에서 `reversed()`로 순서를 복원하여 AI가 읽을 자연스러운 시간 흐름 구성.
    - **큐(Queue, FIFO) ➔ `AI_connect.build_contents`**: 프롬프트 글자 수 한도 초과 시, 가장 오래된 대화(0번 인덱스)부터 `pop(0)`으로 순차 제거하여 슬라이딩 윈도우 유지.
@@ -124,7 +155,19 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
 6. **심층 방어 (Defense in Depth)**:
    - 입력값 검증: 라우터 1차(Pydantic 타입) ➔ 서비스 2차(비즈니스 공백/길이 제한).
    - 출력값 검증: 1차(isinstance 반환 타입) ➔ 2차(품질 검사 및 에러 강등).
+7. **비동기 이벤트 루프와 CPU 바운드 작업 격리 (`run_in_threadpool`)**:
+   - Bcrypt 해싱/검증은 무차별 대입을 막기 위해 의도적으로 연산량을 높인 CPU-bound 작업.
+   - 단일 스레드 비동기 루프에서 직접 실행하면 전체 서버가 수백 ms 동안 멈추는 이벤트 루프 기아(Starvation)가 발생하므로, Starlette의 `run_in_threadpool`을 통해 OS 스레드풀로 오프로딩하여 메인 이벤트 루프의 논블로킹 보장.
+8. **Bcrypt 72바이트 절삭 한계와 사전 검증**:
+   - Bcrypt 알고리즘은 내부적으로 비밀번호를 최대 72바이트까지만 사용하며 초과분은 조용히 무시함.
+   - 이를 방치하면 앞 72바이트가 같은 서로 다른 비밀번호가 동일한 계정으로 로그인되는 중대한 보안 결함이 발생하므로, UTF-8 바이트 단위로 72바이트 초과를 사전에 검증 차단.
+9. **무상태(Stateless) JWT와 실시간 DB 검증의 조화**:
+   - 순수 JWT는 서버 세션 저장이 없어 빠르지만, 토큰 만료 전까지 탈퇴/정지 유저를 즉각 차단할 수 없는 치명적 단점이 존재.
+   - 본 서비스는 가벼운 PK 인덱스 단일 쿼리(`check_user`)를 토큰 검증 단계에 결합하여, 성능 저하 없이 탈퇴 유저 차단과 토큰 탈취 대응을 완벽히 해결.
+10. **SQLAlchemy 비동기 커넥션 풀 및 세션 최적화**:
+    - `pool_pre_ping=True`: 풀에서 커넥션을 꺼낼 때 `SELECT 1` 핑으로 연결 유효성을 사전 점검하여 MySQL `wait_timeout`으로 인한 `OperationalError(2006, 2013)` 방지.
+    - `expire_on_commit=False`: 커밋 후 객체 속성 만료로 인한 비동기 환경의 `MissingGreenlet` 에러를 원천 차단하고 인메모리 객체 상태 보존.
 
 ---
 *작업 브랜치: `docs/lgt-back/code-analysis`*  
-*문서 버전: v1.4*
+*문서 버전: v1.5*

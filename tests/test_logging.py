@@ -219,7 +219,12 @@ def test_ai_fallback_skip_is_logged(client, auth_headers, monkeypatch, app_logs)
     assert skipped.request_id == response.json()["request_id"]
 
 
-def test_ai_config_fallback_logs_omit_exception_details(monkeypatch, app_logs):
+@pytest.mark.parametrize("failure", [
+    TypeError("private-config-detail"),
+    # 실제 SDK는 pydantic 모델이라 미지원 옵션에서 ValidationError(ValueError)를 던진다.
+    ValueError("private-config-detail"),
+], ids=["type-error", "validation-error"])
+def test_ai_config_fallback_logs_omit_exception_details(monkeypatch, app_logs, failure):
     monkeypatch.setattr(AI_connect, "AI_THINKING_LEVEL", "low")
     monkeypatch.setattr(
         AI_connect.types,
@@ -230,7 +235,7 @@ def test_ai_config_fallback_logs_omit_exception_details(monkeypatch, app_logs):
     monkeypatch.setattr(
         AI_connect.types,
         "GenerateContentConfig",
-        Mock(side_effect=[TypeError("private-config-detail"), config]),
+        Mock(side_effect=[failure, config]),
     )
     assert AI_connect._build_config(AI_connect.PromptPayload(), 1) is config
     entries = records(app_logs)

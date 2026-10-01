@@ -21,6 +21,7 @@ from app.core.config     import (
     AI_THINKING_LEVEL,
     MAX_CONTEXT_CHARS,
     MIN_FALLBACK_BUDGET_SECONDS,
+    RETRY_BACKOFF_SECONDS,
 )
 
 from app.core.errors     import (
@@ -97,10 +98,9 @@ def build_contents(
         # [읽는 순서 2] 유효성 필터링: 질문(question)과 답변(answer)이 둘 다 존재하는 정상 턴만 통과 (누락/빈값은 자동 탈락)
         if t.get("question") and t.get("answer")
     ]
-    # [2단계 실제 작용 지점: 최근 대화 슬라이싱]
-    # 음수 인덱스 슬라이싱([-N:]): 리스트 맨 뒤에서부터 N개를 잘라내어 가장 최근 대화만 유지 (토큰 낭비 방지)
-    # (예: 대화가 10개 있어도 AI_CONTEXT_TURNS가 5라면 가장 최근 5개만 남김)
-    turns = turns[-AI_CONTEXT_TURNS:]
+    # AI_CONTEXT_TURNS=0 은 문맥을 쓰지 않겠다는 뜻이다.
+    # turns[-0:] 는 전체를 남기므로 0을 따로 처리한다.
+    turns = turns[-AI_CONTEXT_TURNS:] if AI_CONTEXT_TURNS > 0 else []
 
     # 글자 수 제한 초과로 인한 과거 대화 절삭 여부 플래그
     truncated = False
@@ -339,9 +339,10 @@ def _build_config(
     # 기본 설정(base)과 부가 설정(extra)을 언패킹(**)하여 최종 설정 객체 생성 시도
     try:
         return types.GenerateContentConfig(**base, **extra)
-    # 설치된 SDK 버전이 낮아 extra 옵션 파라미터를 인식하지 못해 TypeError가 발생한 경우
-    except TypeError:
-        # 설정 다운그레이드 이벤트 로깅
+    except Exception:  # noqa: BLE001 - 구버전 SDK
+        # SDK가 pydantic 모델이라 미지원 옵션은 TypeError가 아니라
+        # ValidationError(ValueError)로 올라온다. 예외 종류를 좁히면
+        # 이 방어 코드가 동작하지 않아 모든 요청이 같은 오류로 실패한다.
         log_event("ai_config_fallback")
         # 안전한 기본 설정(base)만으로 객체를 생성하여 반환 (하위 호환성 보장)
         return types.GenerateContentConfig(**base)
@@ -517,17 +518,17 @@ async def generate_answer(
         # [회차 판정] 1회차(주 모델, index=0)는 False이므로 아래의 폴백 전용 코드들이 전부 스킵(통과)됨
         # 오직 1회차가 실패하고 2회차(보조 모델, index=1)로 넘어왔을 때만 True가 되어 동작함!
         is_fallback = model_index > 0
-        # 현재 시도 중인 모델명 갱신
-        last_model  = model
 
-        # 이번 1회 호출에 부여할 제한 시간(Budget): 단일 제한시간과 전체 잔여시간 중 작은 값 선택
-        budget = min(AI_TIMEOUT_SECONDS, remaining())
-        # [2회차 전용] 폴백 모델 차례인데 남은 시간이 최소 가용시간(예: 3초) 이하이면 무리하게 시도하지 않고 즉시 포기
-        if is_fallback and budget <= MIN_FALLBACK_BUDGET_SECONDS:
+        # 주 모델은 시도하되, 폴백을 수행할 시간이 부족하면 이전 실패를 유지한다.
+        # 제공사 하한보다 짧은 deadline은 400으로 거부되므로 예산을 깎지 않는다.
+        if is_fallback and remaining() < MIN_FALLBACK_BUDGET_SECONDS:
             log_event("ai_fallback_skip", model=model, request_id=request_id)
             break
 
-        # [2회차 전용] 1회차 주 모델 실패 후 폴백 자격을 얻어 넘어온 경우, 폴백 전환 감사 로그 기록
+        # 건너뛴 모델이 실패한 모델로 기록되지 않도록 호출이 확정된 뒤에 갱신한다.
+        last_model = model
+        budget     = AI_TIMEOUT_SECONDS
+
         if is_fallback:
             fallback_attempted = True
             log_event(
@@ -601,20 +602,19 @@ async def generate_answer(
                     exc        = exc,
                 )
 
-            # 동일 모델로 재시도할 수 있는 조건인지 3중 검증
-            # 1) 일시적 장애(503, 429, 네트워크 등)인지 여부 (401 키오류나 400 등은 재시도 무의미)
-            # 2) 아직 최대 재시도 횟수(AI_MAX_RETRIES)가 남아있는지 여부
-            # 3) 전체 남은 시간이 최소 1초 이상 남아있는지 여부
+            # 같은 모델로 재시도할지 판단.
+            # 대기 시간까지 포함해 호출 한 번을 온전히 끝낼 여유가 없으면 시작하지 않는다.
+            # 그러지 않으면 chat_main의 전체 타임아웃에 잘려 실제 오류 대신 504로 보고된다.
+            backoff   = RETRY_BACKOFF_SECONDS * (attempt + 1)
             can_retry = (
                 last_code in RETRY_SAME_MODEL
                 and attempt < AI_MAX_RETRIES
-                and remaining() > 1.0
+                and remaining() >= budget + backoff
             )
             # 재시도 조건을 만족하지 못하면 내부 루프 즉시 탈출
             if not can_retry:
                 break
-            # 지수 백오프(Exponential Backoff): 재시도 횟수에 비례해 점진적으로 대기시간을 늘려 서버 회복 유도
-            await asyncio.sleep(min(0.5 * (attempt + 1), max(0.0, remaining() - 0.5)))
+            await asyncio.sleep(backoff)
 
         # [루프 하단 관문: 1회차 주 모델 실패 후 다음 2회차 폴백으로 넘어갈 자격이 있는지 가장 먼저 심사]
         # 발생한 에러가 다른 모델로 바꾼다고 해결될 성질이 아닌 경우(예: 유해성 차단, API 키 오류 등) 폴백 루프 즉시 중단

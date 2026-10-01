@@ -164,9 +164,10 @@ async def test_history_failure_rolls_back_before_reusing_session(database, monke
 def test_timeout_environment_names():
     result = subprocess.run(
         [sys.executable, "-B", "-c",
+         # 제공사 하한(10초) 위의 값으로 확인한다. 하한 처리는 test_ai_connect.py에서 검증한다.
          "from app.core.config import AI_TIMEOUT_SECONDS, AI_TOTAL_TIMEOUT_SECONDS; "
-         "assert AI_TIMEOUT_SECONDS == 2.5; assert AI_TOTAL_TIMEOUT_SECONDS == 7.5"],
-        env={**os.environ, "AI_TIMEOUT_SECONDS": "2.5", "AI_TOTAL_TIMEOUT_SECONDS": "7.5"},
+         "assert AI_TIMEOUT_SECONDS == 12.5; assert AI_TOTAL_TIMEOUT_SECONDS == 27.5"],
+        env={**os.environ, "AI_TIMEOUT_SECONDS": "12.5", "AI_TOTAL_TIMEOUT_SECONDS": "27.5"},
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr

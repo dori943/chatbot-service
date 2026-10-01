@@ -1,4 +1,4 @@
-# 챗봇 서비스 코드 분석 및 학습 요약 (v1.5)
+# 챗봇 서비스 코드 분석 및 학습 요약 (v1.6)
 
 본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인, AI 연동, DB 영속화, 자료구조 최적화)을 분석한 내용을 체계적으로 정리한 문서입니다.
 
@@ -167,7 +167,11 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
 10. **SQLAlchemy 비동기 커넥션 풀 및 세션 최적화**:
     - `pool_pre_ping=True`: 풀에서 커넥션을 꺼낼 때 `SELECT 1` 핑으로 연결 유효성을 사전 점검하여 MySQL `wait_timeout`으로 인한 `OperationalError(2006, 2013)` 방지.
     - `expire_on_commit=False`: 커밋 후 객체 속성 만료로 인한 비동기 환경의 `MissingGreenlet` 에러를 원천 차단하고 인메모리 객체 상태 보존.
+11. **예외 처리 스코프 최소화 원칙 (Minimal `try` Scope) 및 예외 마스킹 방지**:
+    - `auth.login()`에서 `if not valid:` 비즈니스 조건 분기를 `try` 블록 밖으로 분리한 이유.
+    - 실제 `ValueError`를 발생시킬 수 있는 Bcrypt 연산만 `try`에 격리하여, 단순 비밀번호 오타(401 UNAUTHORIZED 정상 비즈니스 분기)와 DB 해시 손상(503 AUTH_UNAVAILABLE 시스템 결함)의 성격을 명확히 분리.
+    - `try` 블록 비대화로 인해 401 비즈니스 예외가 `except ValueError`에 가로채져 503 서버 장애로 둔갑하는 예외 마스킹(버그 은닉)을 원천 차단.
 
 ---
 *작업 브랜치: `docs/lgt-back/code-analysis`*  
-*문서 버전: v1.5*
+*문서 버전: v1.6*

@@ -236,6 +236,17 @@ function bindAuthEvents() {
       return;
     }
 
+    // ==============================================================================
+    // [프론트엔드-백엔드 연동 관문: API Gateway & Contract Binding (핵심 접점)]
+    // 1) 엔드포인트 동적 라우팅:
+    //    - signup === true  ➔ 백엔드 POST /auth/register (Bcrypt 해싱 및 DB INSERT 파이프라인 호출)
+    //    - signup === false ➔ 백엔드 POST /auth/login    (Bcrypt 검증 및 HS256 JWT 발급 파이프라인 호출)
+    // 2) 백엔드 DTO(AuthRequest) 계약(Contract) 준수:
+    //    - 'Content-Type': 'application/json' 헤더로 FastAPI의 Pydantic 역직렬화 엔진 가동
+    //    - { id, pw } 페이로드는 AuthRequest 스키마(id: str, pw: str)와 1:1로 완전 일치 (불일치 시 422 에러)
+    // 3) 비동기 네트워크 I/O 및 응답 역직렬화:
+    //    - 화면 깜빡임 없이 백그라운드 HTTP POST 요청 전송 및 response.json() 객체 복원
+    // ==============================================================================
     // 모드 플래그에 따라 요청할 백엔드 API 엔드포인트 결정
     const endpoint = signup ? '/auth/register' : '/auth/login';
 
@@ -246,7 +257,7 @@ function bindAuthEvents() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, pw: password })
       });
-      // 백엔드 응답 본문 JSON 역직렬화
+      // 백엔드가 반환한 JSON 응답 본문을 자바스크립트 객체로 역직렬화
       const result = await response.json();
 
       // HTTP 응답 코드가 성공(200~299) 범위가 아닌 경우 에러 처리
@@ -286,6 +297,13 @@ function bindAuthEvents() {
   });
 }
 
+// ==============================================================================
+// [모듈 부트스트랩 및 초기 진입점 (Top-Level Execution)]
+// auth.js 파일이 브라우저에 로드되는 즉시 1회 자동 실행되는 애플리케이션 초기화 진입점
+// - 파이썬의 `if __name__ == "__main__":`이나 메인 함수와 동일한 역할
+// 1) syncAuthState(): 페이지 최초 로드 시 localStorage를 즉시 검사하여 게스트/회원 UI 선제 렌더링
+// 2) bindAuthEvents(): 폼 submit 및 모달 버튼들에 이벤트 리스너를 미리 전깃줄처럼 연결(바인딩)
+// ==============================================================================
 // 애플리케이션 초기 구동 시 로컬 스토리지 기반 인증 상태 동기화
 syncAuthState();
 // 모달 및 폼 인터랙션 이벤트 리스너 바인딩

@@ -150,66 +150,131 @@ def build_contents(
     )
 
 
+# ==============================================================================
+# [클라이언트 캐싱: _client]
+# Google GenAI 클라이언트를 싱글톤(Singleton)으로 생성 및 재사용
+# 매 요청마다 클라이언트를 새로 생성하면 TCP 소켓 및 SSL 인증 핸드셰이크 비용이 발생하므로,
+# lru_cache(maxsize=1)를 적용해 최초 1회 생성 후 메모리에 영구 캐싱하여 재사용
+# ==============================================================================
+# 메모리 캐시 크기를 1로 제한하여 단일 클라이언트 인스턴스만 유지하는 데코레이터
 @lru_cache(maxsize=1)
+# 구글 GenAI 공식 API 클라이언트를 반환하는 함수
 def _client() -> genai.Client:
+    # 환경변수의 API 키를 주입하여 클라이언트 생성
     return genai.Client(api_key=AI_API_KEY)
 
 
-def _classify(exc: Exception) -> str:
+# ==============================================================================
+# [예외 감별사: _classify]
+# 외부 AI 통신 중 발생한 다양한 파이썬/구글/네트워크 예외를 시스템 표준 에러 코드로 변환
+# 1) 타임아웃 예외: asyncio.TimeoutError ➔ ErrorCode.TIMEOUT
+# 2) 구글 API 에러(errors.APIError):
+#    - 401/403 또는 400(API_KEY_*): API 키 설정 오류 ➔ ErrorCode.CONFIG
+#    - 429: 요청 한도/할당량 초과 ➔ ErrorCode.RATE_LIMIT
+#    - 400/404: 잘못된 모델명/문법 ➔ ErrorCode.BAD_REQUEST
+#    - 500 이상: 구글 자체 서버 장애 ➔ ErrorCode.UPSTREAM
+# 3) 저수준 네트워크 예외: SDK 하위 httpx/socket 예외를 이름(Name) 기반으로 유연하게 판정
+# ==============================================================================
+# 발생한 예외 객체를 분석하여 표준 ErrorCode 문자열로 분류하는 함수
+def _classify(
+    # 검사 대상 파이썬 예외 객체
+    exc: Exception,
+) -> str:
     """예외를 우리 에러 코드로 변환한다."""
+    # 파이썬 기본 타임아웃 또는 비동기 타임아웃 예외인 경우
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return ErrorCode.TIMEOUT
 
+    # 구글 GenAI SDK의 공식 API 통신 오류인 경우
     if isinstance(exc, errors.APIError):
+        # HTTP 상태 코드 추출 (예: 401, 429, 500 등)
         code = getattr(exc, "code", None)
+        # 인증 실패(401) 또는 접근 거부(403)인 경우 API 키 설정 오류로 분류
         if code in (401, 403):
             return ErrorCode.CONFIG
+        # 구글 API는 잘못된 키 오류를 400 Bad Request의 세부 사유로 전달하기도 함
         if code == 400:
             # 키 오류는 HTTP 400의 구조화된 reason으로도 반환된다.
+            # 상세 에러 딕셔너리 추출
             details = getattr(exc, "details", {})
+            # details가 딕셔너리 형태인 경우 세부 내역 탐색
             if isinstance(details, dict):
+                # error 키가 존재하면 언패킹
                 error = details.get("error", details)
+                # 하위 details 리스트 순회
                 if isinstance(error, dict):
                     for detail in error.get("details", []) or []:
+                        # 세부 reason이 API_KEY_로 시작하면 설정 오류로 확정
                         if isinstance(detail, dict) and str(detail.get("reason", "")).startswith("API_KEY_"):
                             return ErrorCode.CONFIG
+            # 에러 메시지 본문에 'api key' 문구가 포함된 경우 설정 오류로 판정
             if "api key" in str(getattr(exc, "message", "") or "").lower():
                 return ErrorCode.CONFIG
+        # 호출 한도 초과(429 Too Many Requests)
         if code == 429:
             return ErrorCode.RATE_LIMIT
+        # 요청 문법 오류(400) 또는 존재하지 않는 리소스/모델(404)
         if code in (400, 404):
             return ErrorCode.BAD_REQUEST
+        # 500번대 서버 측 오류는 구글 상위 서버 장애로 분류
         if isinstance(code, int) and code >= 500:
             return ErrorCode.UPSTREAM
+        # 그 외 기타 API 에러 기본값
         return ErrorCode.UPSTREAM
 
     # httpx 등 하위 라이브러리 예외는 이름으로 판별 (SDK 버전에 따라 타입이 바뀜)
+    # SDK 내부 종속 라이브러리의 클래스 이름 문자열 추출 (예: 'ConnectTimeout', 'ConnectError')
     name = type(exc).__name__
+    # 클래스명에 Timeout이 포함된 경우 타임아웃 코드로 맵핑
     if "Timeout" in name:
         return ErrorCode.TIMEOUT
+    # 클래스명에 Connect, Network, Transport가 포함된 경우 네트워크 연결 실패로 맵핑
     if "Connect" in name or "Network" in name or "Transport" in name:
         return ErrorCode.CONNECTION
+    # 어떤 조건에도 부합하지 않는 미분류 예외
     return ErrorCode.UNKNOWN
 
 
-def _extract_answer(response: Any) -> tuple[str, str | None]:
+# ==============================================================================
+# [텍스트 추출 및 검열 감별기: _extract_answer]
+# 구글 응답 객체(GenerateContentResponse)에서 답변 텍스트를 안전하게 추출
+# 1) 프롬프트 입력 차단: 질문 자체가 유해하여 모델 진입 전 차단된 경우 (prompt_feedback.block_reason)
+# 2) 답변 생성 도중 차단: 모델이 답변을 뱉다가 안전 정책(finish_reason=SAFETY)에 걸린 경우
+# 3) 토큰 한도 초과: max_output_tokens 한도 도달로 답변이 잘린 경우 (finish_reason=MAX_TOKENS)
+# 4) 정상 텍스트 추출: 공백 제거(.strip()) 후 유효한 텍스트 반환, 비어있으면 EMPTY_RESPONSE
+# ==============================================================================
+# 모델 응답에서 순수 텍스트와 에러 코드를 분리 추출하는 함수 (성공 시 err_code는 None)
+def _extract_answer(
+    # 구글 SDK가 반환한 응답 객체
+    response: Any,
+) -> tuple[str, str | None]:
     """응답에서 텍스트를 꺼낸다. 실패 시 (빈 문자열, 에러코드)."""
     # 안전 필터에 걸린 경우 prompt_feedback.block_reason 이 채워진다
+    # 사용자의 입력 질문에 대한 구글의 사전 안전성 피드백 객체 조회
     feedback = getattr(response, "prompt_feedback", None)
+    # 질문 자체가 정책 위반으로 차단(Block)된 경우 즉시 BLOCKED 에러 반환
     if feedback is not None and getattr(feedback, "block_reason", None):
         return "", ErrorCode.BLOCKED
 
+    # 모델이 생성한 후보 답변 목록 조회
     candidates = getattr(response, "candidates", None) or []
+    # 후보 답변이 존재하는 경우 생성이 종료된 원인(finish_reason) 검사
     if candidates:
+        # 종료 사유 문자열 추출
         reason = str(getattr(candidates[0], "finish_reason", "") or "")
+        # 최대 출력 토큰 수 한도 도달로 인해 생성이 강제 중단된 경우
         if "MAX_TOKENS" in reason.upper():
             return "", ErrorCode.TOKEN_LIMIT
+        # 생성 도중 유해 콘텐츠(폭력, 성인 등) 필터에 걸려 차단된 경우
         if "SAFETY" in reason.upper() or "BLOCK" in reason.upper():
             return "", ErrorCode.BLOCKED
 
+    # 응답 객체의 text 속성에서 앞뒤 공백을 제거한 순수 텍스트 추출
     text = (getattr(response, "text", None) or "").strip()
+    # 텍스트가 정상적으로 존재하면 성공 결과(text, 에러 없음 None) 반환
     if text:
         return text, None
+    # 텍스트가 비어있는 경우 빈 응답 에러 코드 반환
     return "", ErrorCode.EMPTY_RESPONSE
 
 

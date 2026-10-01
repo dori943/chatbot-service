@@ -101,7 +101,10 @@ AI_ERROR_STATUS = {
     ErrorCode.TOKEN_LIMIT : 502,
 }
 
-RETRY_SAME_MODEL = {ErrorCode.RATE_LIMIT, ErrorCode.CONNECTION}
+# 잠시 뒤 같은 모델로 다시 부르면 풀릴 수 있는 실패.
+# UPSTREAM(제공사 5xx)은 대부분 일시적이므로, 성능이 낮은 폴백 모델로 내려가기 전에
+# 주 모델을 한 번 더 시도한다.
+RETRY_SAME_MODEL = {ErrorCode.RATE_LIMIT, ErrorCode.CONNECTION, ErrorCode.UPSTREAM}
 
 FALLBACK_TRIGGERS = {
     ErrorCode.TIMEOUT,

@@ -44,10 +44,7 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
             # 설정 파일에 정의된 초 단위 제한 시간 (초과 시 asyncio.TimeoutError 발생)
             timeout = config.AI_TOTAL_TIMEOUT_SECONDS,
         )
-        # AI 모듈이 반환한 데이터가 규격 클래스(AIResult) 형태인지 런타임 타입 검사
-        if not isinstance(result, AIResult):
-            # 규격에 맞지 않으면 의도적으로 예외를 발생시켜 except 블록으로 전달
-            raise TypeError("Invalid AI result")
+        if not isinstance(result, AIResult): raise TypeError("Invalid AI result")
     except Exception as exc:
         # AI 호출 실패 또는 타임아웃 발생 시 장애 분석용 이벤트 로그 기록
         log_event("chat_ai_failed", exc=exc, request_id=request_id)
@@ -126,13 +123,8 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
 def validate_room_id(data: ChatRequest) -> str:
     # 문자열 앞뒤 공백 제거
     room_id = data.room_id.strip()
-    # 공백만 있거나 비어있는 경우 422 에러 발생
-    if not room_id:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID를 입력해 주세요.")
-    # 대화방 ID가 64자를 초과할 경우 422 에러 발생
-    if len(room_id) > 64:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID는 64자 이내로 입력해 주세요.")
-    # 유효성 검증을 통과한 정제된 대화방 ID 반환
+    if not room_id:       raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID를 입력해 주세요.")
+    if len(room_id) > 64: raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID는 64자 이내로 입력해 주세요.")
     return room_id
 
 
@@ -140,13 +132,8 @@ def validate_room_id(data: ChatRequest) -> str:
 def validate_room_name(data: ChatRequest) -> str:
     # 문자열 앞뒤 공백 제거
     room_name = data.room_name.strip()
-    # 공백만 있거나 비어있는 경우 422 에러 발생
-    if not room_name:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름을 입력해 주세요.")
-    # 대화방 이름이 100자를 초과할 경우 422 에러 발생
-    if len(room_name) > 100:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름은 100자 이내로 입력해 주세요.")
-    # 유효성 검증을 통과한 정제된 대화방 이름 반환
+    if not room_name:        raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름을 입력해 주세요.")
+    if len(room_name) > 100: raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 이름은 100자 이내로 입력해 주세요.")
     return room_name
 
 
@@ -154,16 +141,11 @@ def validate_room_name(data: ChatRequest) -> str:
 def validate_question(data: ChatRequest) -> str:
     # 문자열 앞뒤 공백 제거
     question = data.question.strip()
-    # 공백만 있거나 비어있는 경우 422 에러 발생
-    if not question:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "질문을 입력해 주세요.")
+    if not question:          raise APIError(422, ErrorCode.INVALID_INPUT, "질문을 입력해 주세요.")
 
     # 환경설정의 최대 길이와 5,000자 중 작은 값을 허용 한도로 설정
     limit = min(config.MAX_QUESTION_LENGTH, 5000)
-    # 질문 글자 수가 제한을 초과할 경우 422 에러 발생
-    if len(question) > limit:
-        raise APIError(422, ErrorCode.INVALID_INPUT, f"질문은 {limit:,}자 이내로 입력해 주세요.")
-    # 유효성 검증을 통과한 정제된 질문 반환
+    if len(question) > limit: raise APIError(422, ErrorCode.INVALID_INPUT, f"질문은 {limit:,}자 이내로 입력해 주세요.")
     return question
 
 

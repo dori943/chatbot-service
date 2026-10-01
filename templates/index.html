@@ -7,9 +7,8 @@
     <link rel="stylesheet" href="/static/css/fonts.css">
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/style.css">
-    <!-- 클라이언트 사이드 로직 및 DOM 이벤트 핸들링을 위한 자바스크립트 모듈 로드 -->
-    <script type="module" src="/static/js/chat.js"></script>
-    <script type="module" src="/static/js/auth.js"></script>
+    <script type="module" src="/static/js/chat-ui.js"></script>
+    <script type="module" src="/static/js/auth-ui.js"></script>
   </head>
   <body data-design="damda">
     <button class="scrim" id="scrim" aria-label="대화 목록 닫기" hidden></button>
@@ -39,9 +38,9 @@
             <circle cx="10.5" cy="10.5" r="6.5"/>
             <path d="m16 16 4 4"/>
           </svg>
-          <input id="history-search" aria-label="대화 검색" placeholder="대화 검색">
+          <input id="history-search" class="history-search" aria-label="대화 검색" placeholder="대화 검색">
         </div>
-        <nav id="history-list" aria-label="대화 목록"></nav>
+        <nav id="history-list" class="history-list" aria-label="대화 목록"></nav>
         <p id="history-empty" class="history-empty">
           첫 질문을 남겨보세요.
           <br>
@@ -72,7 +71,7 @@
           </svg>
         </button>
         <div class="top-title">
-          <strong id="conversation-title">새로운 대화</strong>
+          <strong id="conversation-title" class="conversation-title">새로운 대화</strong>
           <span>일상에 더해지는 또 하나의 관점</span>
         </div>
         <!-- [탑바 글로벌 인증 컨트롤]
@@ -80,7 +79,7 @@
              1) #header-user: auth.js가 JWT 토큰의 claims.id를 디코딩하여 주입하며, 유효 토큰 없을 시 hidden 유지
              2) .login-button[data-auth]: auth.js에 의해 인증 상태에 따라 '로그인' ↔ '로그아웃' 텍스트를 동적 치환 -->
         <div class="top-actions">
-          <span id="header-user" hidden></span>
+          <span id="header-user" class="header-user" hidden></span>
           <button class="login-button" data-auth>로그인</button>
         </div>
       </header>
@@ -145,14 +144,12 @@
         <div id="transcript" class="transcript" aria-live="polite" aria-label="대화 내용" hidden></div>
       </div>
       <div class="composer-dock">
-        <p id="status" class="status" role="status"></p>
-        <!-- 자바스크립트에서 폼 제출(Submit) 이벤트를 가로채어(Intercept) 비동기 통신(AJAX/Fetch)으로 처리하기 위한 타겟 폼 -->
-        <form id="chat-form" class="composer">
+        <form id="chat-form" class="composer chat-form">
           <label class="sr-only" for="question">메시지 입력</label>
-          <textarea id="question" placeholder="무엇이든 물어보세요" rows="2" maxlength="5000" required></textarea>
+          <textarea id="question" class="question" placeholder="무엇이든 물어보세요" rows="2" aria-describedby="status" required></textarea>
           <div class="composer-tools">
             <span class="input-hint">Enter로 전송 · Shift+Enter로 줄바꿈</span>
-            <span id="char-count">0 / 5,000</span>
+            <span id="char-count" class="char-count">0 / 5,000</span>
             <button class="send-button" id="send" type="submit" aria-label="메시지 보내기">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M12 19V5m-6 6 6-6 6 6"/>
@@ -161,77 +158,56 @@
             <button id="stop" type="button" class="stop-button" hidden>중지</button>
           </div>
         </form>
-        <p class="disclaimer">AI의 답변은 틀릴 수 있습니다. 중요한 정보는 다시 확인하세요.</p>
+        <div class="chat-feedback">
+          <p id="status" class="status" role="status"></p>
+          <small id="request-id" class="request-id" hidden></small>
+          <button id="retry" type="button" class="status-action retry" hidden>다시 시도</button>
+          <button id="reauth" type="button" class="status-action reauth" hidden>로그인</button>
+        </div>
+        <p class="disclaimer">AI의 답변은 틀릴 수 있습니다. 중요한 정보는 다시 확인하세요.<br>기본 설정에서는 최근 5턴의 대화를 참고합니다. 오래된 내용은 질문에 다시 적어 주세요.</p>
       </div>
     </main>
-    <!-- ==============================================================================
-         [인증 모달 다이얼로그: auth-dialog]
-         HTML5 네이티브 <dialog> 요소를 활용한 단일 폼 기반 로그인 및 회원가입 모달
-         1) 네이티브 모달 레이어링: showModal() 실행 시 브라우저 최상위 레이어(Top Layer) 및 백드롭(::backdrop) 자동 생성
-         2) 웹 접근성(a11y) 보장: Esc 키 닫기 이벤트 및 다이얼로그 내부 포커스 트래핑(Focus Trapping) 브라우저 기본 지원
-         3) 싱글 폼 다중 모드: 탭 전환(data-tab)에 따라 동일한 <form> 내에서 엔드포인트 및 입력 필드를 동적으로 전환
-         ============================================================================== -->
-    <dialog id="auth-dialog">
-      <!-- 모달 닫기 버튼: data-close 속성을 통해 dialog.close() 메서드 바인딩 -->
+    <dialog id="auth-dialog" class="auth-dialog">
       <button class="modal-close icon-button" data-close aria-label="닫기">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="m6 6 12 12M18 6 6 18"/>
         </svg>
       </button>
       <span class="modal-mark">✳</span>
-      <!-- 모드별 타이틀 헤더: 로그인("다시 만나 반가워요.") / 회원가입("새로운 대화를 시작해요.") 동적 변경 -->
-      <h2 id="auth-title">다시 만나 반가워요.</h2>
+      <h2 id="auth-title" class="auth-title">다시 만나 반가워요.</h2>
       <p class="modal-intro">대화를 이어갈 나만의 공간.</p>
       <!-- 인증 모드 선택 탭: 단일 폼의 제출 엔드포인트(/auth/login vs /auth/register) 및 비밀번호 확인 필드 활성화 제어 -->
       <div class="auth-tabs">
         <button type="button" data-tab="login" class="active">로그인</button>
         <button type="button" data-tab="signup">회원가입</button>
       </div>
-      <!-- ==============================================================================
-           [인증 요청 전송 폼: auth-form (프론트엔드 인증의 코어 엔진)]
-           1) 단일 폼 다중 모드 (Single Form Multi-Mode):
-              - 별도의 로그인/회원가입 폼을 분리하지 않고 동일한 <form> 인스턴스를 공유
-              - 탭 상태에 따라 엔드포인트(/auth/login vs /auth/register)와 UI 필드를 동적으로 스위칭하여 DOM 중복 제거
-           2) 백엔드 DTO(AuthRequest)와의 1:1 계약(Contract):
-              - 수집된 { id, pw } 페이로드는 FastAPI의 AuthRequest 스키마와 직접 맵핑
-           3) 클라이언트 1차 방어선 (Client-Side Fail-Fast):
-              - HTML5 제약 조건(required, minlength, maxlength)으로 부적격 입력을 브라우저 단에서 0ms 만에 차단
-              - 불필요한 네트워크 왕복(Round-Trip) 및 백엔드 Bcrypt 해싱 연산 낭비를 선제적으로 방지
-           4) 비동기 통신 가로채기:
-              - submit 이벤트에서 preventDefault()를 호출하여 페이지 리로드 없이 fetch AJAX 통신 수행
-           ============================================================================== -->
-      <form id="auth-form">
+      <form id="auth-form" class="auth-form">
         <label for="auth-name">아이디</label>
-        <!-- [사용자 아이디 입력 필드]
-             1) 백엔드 매핑: AuthRequest.id (DB Login.id VARCHAR(50) 대응)
-             2) 자동완성 UX: autocomplete="username"을 선언하여 브라우저 및 키체인의 계정 저장/추천 기능 연동
-             3) 입력 규격 제한: minlength="3", maxlength="24"로 유효 범위를 제한하고 required로 빈 값 제출 방지 -->
-        <input id="auth-name" autocomplete="username" placeholder="아이디를 입력하세요" minlength="3" maxlength="24" required>
+        <input id="auth-name" class="auth-name" autocomplete="username" placeholder="아이디를 입력하세요" required>
         <label for="auth-password">비밀번호</label>
-        <!-- [사용자 비밀번호 입력 필드]
-             1) 백엔드 매핑: AuthRequest.pw (Bcrypt 72바이트 절삭 한계 및 해싱 파이프라인 대응)
-             2) 보안 규격 제약: minlength="8"로 취약한 단문 비밀번호를 1차 차단하고 maxlength="128"로 서비스 안정성 확보
-             3) 자격 증명 관리 최적화:
-                - 로그인 모드: autocomplete="current-password"로 브라우저에 저장된 기존 패스워드 자동 입력 유도
-                - 회원가입 모드: auth.js가 "new-password"로 동적 변경하여 강력한 새 암호 생성 및 저장 제안 -->
-        <input id="auth-password" type="password" autocomplete="current-password" placeholder="8자 이상 입력하세요" minlength="8" maxlength="128" required>
-        <!-- [회원가입 전용 비밀번호 확인 컨테이너: #confirm-wrap]
-             1) 조건부 가시성: 로그인 모드에서는 hidden 상태로 DOM 트리에서 렌더링 배제
-             2) 오타 방지 방어선: 회원가입 전환 시 hidden 해제 및 required 속성이 부여되며, 
-                auth.js에서 password !== confirm.value 불일치를 감지하여 서버 API 호출 전 즉시 차단 -->
-        <div id="confirm-wrap" hidden>
+        <input id="auth-password" class="auth-password" type="password" autocomplete="current-password" placeholder="비밀번호를 입력하세요" required>
+        <div id="confirm-wrap" class="confirm-wrap" hidden>
           <label for="auth-confirm">비밀번호 확인</label>
-          <input id="auth-confirm" type="password" autocomplete="new-password" placeholder="비밀번호를 한 번 더 입력하세요">
+          <input id="auth-confirm" class="auth-confirm" type="password" autocomplete="new-password" placeholder="비밀번호를 한 번 더 입력하세요">
         </div>
         <!-- [단일 폼 제출 트리거]
              활성화된 인증 탭(data-tab) 상태에 따라 auth.js가 버튼 텍스트를 '로그인' ↔ '회원가입'으로 동적 반영 -->
         <button class="auth-submit" type="submit">로그인</button>
       </form>
-      <!-- [웹 접근성(a11y) Live Region: #auth-status]
-           1) role="status": 시각장애인 스크린 리더(Screen Reader)가 DOM의 텍스트 변화를 실시간 감지하여 음성 안내
-           2) 피드백 채널: 백엔드 HTTP 401/409/422/503 에러 메시지 및 회원가입 성공 안내를 사용자에게 비동기로 표시 -->
-      <p id="auth-status" role="status"></p>
+      <p id="auth-status" class="auth-status" role="status"></p>
     </dialog>
+    <template class="chat-tools-template">
+      <div class="thread-tools">
+        <button class="delete-chat" type="button">이 대화 삭제</button>
+      </div>
+    </template>
+    <template class="message-template">
+      <article class="message">
+        <div class="message-meta"><b></b></div>
+        <div class="message-text"></div>
+        <button class="copy-button" type="button">답변 복사</button>
+      </article>
+    </template>
     <div id="toast" class="toast" role="status" hidden></div>
   </body>
 </html>

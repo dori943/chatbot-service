@@ -62,18 +62,10 @@ async def check_user(user_id: str, db: AsyncSession) -> bool:
 def validate_auth(data: AuthRequest):
     # 아이디 문자열의 앞뒤 공백 제거
     data.id = data.id.strip()
-    # 아이디가 빈 문자열인 경우 유효성 예외 발생
-    if not data.id:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "아이디를 입력해 주세요.")
-    # 아이디가 DB 컬럼 최대 크기(VARCHAR 50)를 초과하는 경우 차단
-    if len(data.id) > 50:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "아이디는 50자 이내로 입력해 주세요.")
-    # 비밀번호의 앞뒤 공백을 제외한 실제 내용 존재 여부 검사
-    if not data.pw.strip():
-        raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호를 입력해 주세요.")
-    # Bcrypt 알고리즘의 72바이트 입력 절삭 한계 초과 여부를 UTF-8 바이트 단위로 사전 차단
-    if len(data.pw.encode("utf-8")) > 72:
-        raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호는 UTF-8 기준 72바이트 이내로 입력해 주세요.")
+    if not 3 <= len(data.id) <= 50:       raise APIError(422, ErrorCode.INVALID_INPUT, "아이디는 3~50자로 입력해 주세요.")
+    if not data.pw.strip():               raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호를 입력해 주세요.")
+    if len(data.pw) < 8:                  raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호는 8자 이상으로 입력해 주세요.")
+    if len(data.pw.encode("utf-8")) > 72: raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호는 UTF-8 기준 72바이트 이내로 입력해 주세요.")
 
 
 # ==============================================================================
@@ -92,7 +84,8 @@ def validate_auth(data: AuthRequest):
 async def register(data: AuthRequest, db: AsyncSession):
     # 입력 데이터 유효성 검증
     validate_auth(data)
-    # CPU 연산 집약적인 비밀번호 해싱을 별도 스레드풀로 오프로딩하여 이벤트 루프 블로킹 방지
+    if not security.KEY: raise APIError(503, ErrorCode.AUTH_UNAVAILABLE, "인증 서비스를 사용할 수 없습니다.")
+
     password = await run_in_threadpool(hash_password, data.pw)
     # 암호화된 비밀번호를 담은 Login 엔티티 인스턴스 생성
     user = Login(id=data.id, pw=password)
@@ -115,10 +108,14 @@ async def register(data: AuthRequest, db: AsyncSession):
         # DB 가용성 장애(HTTP 503) 예외 전파
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "회원가입을 완료하지 못했습니다.") from None
 
-    # 회원가입 성공 감사 로그 기록
+    token = create_token(user.id)
     log_event("auth_register_success")
-    # 성공 안내 응답 딕셔너리 반환
-    return {"message": "register success"}
+
+    return {
+        "message"    : "register success",
+        "token"      : token,
+        "token_type" : "bearer"
+    }
 
 
 # ==============================================================================
@@ -147,10 +144,7 @@ async def register(data: AuthRequest, db: AsyncSession):
 async def login(data: AuthRequest, db: AsyncSession):
     # 입력 데이터 정합성 검증
     validate_auth(data)
-    # 서버 환경변수에 JWT 서명용 비밀키(SECRET_KEY)가 설정되어 있는지 검증
-    if not security.KEY:
-        # 설정 누락 시 서비스 불가(HTTP 503) 예외 발생
-        raise APIError(503, ErrorCode.AUTH_UNAVAILABLE, "인증 서비스를 사용할 수 없습니다.")
+    if not security.KEY: raise APIError(503, ErrorCode.AUTH_UNAVAILABLE, "인증 서비스를 사용할 수 없습니다.")
 
     try:
         # Primary Key 기반의 최적화된 SQLAlchemy get() 메서드로 사용자 엔티티 조회
@@ -186,21 +180,7 @@ async def login(data: AuthRequest, db: AsyncSession):
         log_event("auth_password_verify_failed", exc=exc)
         # 인증 서비스 오류(HTTP 503) 전파
         raise APIError(503, ErrorCode.AUTH_UNAVAILABLE, "인증 정보를 확인하지 못했습니다.") from None
-    # -------------------------------------------------------------------------
-    # [왜 'if not valid' 검사는 try 블록 밖에 위치하는가? (예외 스코프 최소화)]
-    #   1) try 스코프 최소화 원칙: try 안에는 실제 ValueError 예외를 유발할 수 있는 Bcrypt 연산만 한정 격리
-    #   2) 시스템 결함(503)과 비즈니스 실패(401) 분리:
-    #      - DB 해시 포맷 손상 등 서버 측 결함은 except ValueError에서 503(AUTH_UNAVAILABLE)으로 처리
-    #      - 사용자의 단순 비밀번호 불일치는 정상적인 비즈니스 분기이므로 401(UNAUTHORIZED)로 처리
-    #   3) 예외 마스킹(버그 은닉) 방지: 비즈니스 분기(if not valid)를 try 안에 넣으면 내부 오류 발생 시
-    #      except에 가로채져 401 인증 실패가 엉뚱하게 503 서버 장애로 왜곡되는 버그 원천 예방
-    # -------------------------------------------------------------------------
-    # 유저가 존재하지 않거나 비밀번호가 일치하지 않는 경우
-    if not valid:
-        # [런타임 비즈니스 예외 송출: raise (vs assert)]
-        # - 프로덕션 환경에서 영구히 동작하며, 계정 존재 여부를 유출하지 않는 표준 401 미인증 예외 반환 (사용자 열거 공격 방어)
-        # - 배포 시 최적화(-O)로 제거될 수 있는 디버깅용 assert 대신 raise를 사용하여 실서비스 보안 검증 보장
-        raise APIError(401, ErrorCode.UNAUTHORIZED, "아이디 또는 비밀번호를 확인해 주세요.")
+    if not valid: raise APIError(401, ErrorCode.UNAUTHORIZED, "아이디 또는 비밀번호를 확인해 주세요.")
 
     # 사용자 고유 식별자를 페이로드에 담은 서명된 JWT 액세스 토큰 생성
     token = create_token(user.id)

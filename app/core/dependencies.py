@@ -41,12 +41,8 @@ async def get_token_id(
 ) -> str:
     # 인증 실패 시 클라이언트에 일관되게 반환할 401 표준 에러 객체 사전 생성
     failed = APIError(401, ErrorCode.UNAUTHORIZED, "로그인이 필요합니다. 다시 로그인해 주세요.")
-    # Authorization 헤더가 누락되었거나 Bearer 형식이 아닌 경우 차단
-    if credentials is None:
-        raise failed
-    # 서버 환경변수에 서명 검증용 비밀키가 주입되지 않은 경우 서비스 불가(HTTP 503) 전파
-    if not security.KEY:
-        raise APIError(503, ErrorCode.AUTH_UNAVAILABLE, "인증 서비스를 사용할 수 없습니다.")
+    if credentials is None: raise failed
+    if not security.KEY:    raise APIError(503, ErrorCode.AUTH_UNAVAILABLE, "인증 서비스를 사용할 수 없습니다.")
 
     try:
         # JWT 토큰의 서명(Signature) 유효성, 만료 시각(exp), 필수 클레임 존재 여부를 복합 검증 및 디코딩
@@ -67,13 +63,9 @@ async def get_token_id(
 
     # 디코딩된 페이로드에서 사용자 식별자 추출
     user_id = claims["id"]
-    # 사용자 식별자가 문자열이 아니거나 빈 값이거나 최대 허용 길이(50자)를 초과한 경우 차단
-    if not isinstance(user_id, str) or not user_id or len(user_id) > 50:
-        raise failed
+    if not isinstance(user_id, str) or not user_id or len(user_id) > 50: raise failed
 
-    # 데이터베이스를 실시간 조회하여 해당 유저가 실제로 존재하는지 검증 (탈퇴/정지 유저 즉각 차단)
-    if not await auth.check_user(user_id, db):
-        raise failed
+    if not await auth.check_user(user_id, db): raise failed
 
     # 모든 검증을 완벽히 통과한 검증된 사용자 식별자 반환 (라우터 핸들러의 user_id 인자로 주입됨)
     return user_id

@@ -246,14 +246,15 @@ def test_ai_config_fallback_logs_omit_exception_details(monkeypatch, app_logs, f
 
 def test_auth_success_logs_omit_credentials_and_token(client, app_logs):
     credentials = {"id": "private-new-user", "pw": "private-new-password"}
-    assert client.post("/auth/register", json=credentials).status_code == 200
+    registered = client.post("/auth/register", json=credentials)
+    assert registered.status_code == 200
     response = client.post("/auth/login", json=credentials)
     assert response.status_code == 200
     entries = records(app_logs)
     assert any(record.getMessage() == "auth_register_success" for record in entries)
     login = next(record for record in entries if record.getMessage() == "auth_login_success")
     assert login.request_id == response.headers["X-Request-ID"]
-    assert_not_logged(app_logs, *credentials.values(), response.json()["token"])
+    assert_not_logged(app_logs, *credentials.values(), registered.json()["token"], response.json()["token"])
 
 
 def test_server_exception_log_omits_exception_message(caplog):

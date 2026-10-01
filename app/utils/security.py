@@ -26,11 +26,8 @@ TOKEN_EXP = 60
 # ==============================================================================
 # 평문 비밀번호를 Bcrypt 해시 문자열로 변환하는 함수
 def hash_password(password: str):
-    # 비밀번호에 고유 솔트를 부여하고 해싱한 후 데이터베이스 저장용 문자열로 디코딩
     return bcrypt.hashpw(
-        # 문자열을 UTF-8 바이트 스트림으로 변환 (Bcrypt 필수 요구사항)
         password.encode("utf-8"),
-        # 매 암호화마다 랜덤하게 생성되는 암호학적 솔트 (기본 Cost Factor 12 적용)
         bcrypt.gensalt(),
     ).decode("utf-8")
 
@@ -44,11 +41,8 @@ def hash_password(password: str):
 # ==============================================================================
 # 평문 비밀번호와 암호화된 해시 비밀번호의 일치 여부를 검증하는 함수
 def verify_password(password: str, hashed_password: str):
-    # 두 값을 바이트 스트림으로 변환하여 안전하게 상수 시간 일치 여부 검증
     return bcrypt.checkpw(
-        # 검증 대상 평문 바이트
         password.encode("utf-8"),
-        # 기준 해시 바이트
         hashed_password.encode("utf-8"),
     )
 
@@ -64,16 +58,11 @@ def verify_password(password: str, hashed_password: str):
 # ==============================================================================
 # 사용자 식별자를 포함한 서명된 JWT 액세스 토큰을 발급하는 함수
 def create_token(user_id: str):
-    # UTC 기준 현재 시각에 유효 시간(60분)을 더한 토큰 만료 일시(exp) 계산
     exp = datetime.now(timezone.utc) + timedelta(minutes=TOKEN_EXP)
 
-    # JWT 페이로드에 저장될 클레임 딕셔너리 구성
     payload = {
-        # 사용자 고유 식별자
         "id" : user_id,
-        # 만료 일시 타임스탬프 (RFC 7519 표준 규격)
         "exp": exp
     }
 
-    # 대칭키와 지정된 알고리즘으로 서명하여 최종 JWT 문자열 생성
     return jwt.encode(payload, KEY, algorithm=ALGORITHM)

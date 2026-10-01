@@ -447,20 +447,22 @@ async def generate_answer(
         return AI_TOTAL_TIMEOUT_SECONDS - (time.perf_counter() - started)
 
     # [외부 루프: 모델 교체 파이프라인] 주 모델부터 시작하여 실패 시 폴백 모델 순으로 순회
+    # (총 2바퀴 회전: 1회차는 주 모델, 1회차가 실패하여 루프 하단의 FALLBACK_TRIGGERS를 통과하면 2회차 폴백 모델 실행)
     for model_index, model in enumerate(candidates):
-        # 인덱스가 0보다 크면 대체(폴백) 모델 실행 상태로 판정
+        # [회차 판정] 1회차(주 모델, index=0)는 False이므로 아래의 폴백 전용 코드들이 전부 스킵(통과)됨
+        # 오직 1회차가 실패하고 2회차(보조 모델, index=1)로 넘어왔을 때만 True가 되어 동작함!
         is_fallback = model_index > 0
         # 현재 시도 중인 모델명 갱신
         last_model  = model
 
         # 이번 1회 호출에 부여할 제한 시간(Budget): 단일 제한시간과 전체 잔여시간 중 작은 값 선택
         budget = min(AI_TIMEOUT_SECONDS, remaining())
-        # 폴백 모델 차례인데 남은 시간이 최소 가용시간(예: 3초) 이하이면 무리하게 시도하지 않고 즉시 포기
+        # [2회차 전용] 폴백 모델 차례인데 남은 시간이 최소 가용시간(예: 3초) 이하이면 무리하게 시도하지 않고 즉시 포기
         if is_fallback and budget <= MIN_FALLBACK_BUDGET_SECONDS:
             log_event("ai_fallback_skip", model=model, request_id=request_id)
             break
 
-        # 폴백 모델 시도 플래그 활성화 및 폴백 전환 감사 로그 기록
+        # [2회차 전용] 1회차 주 모델 실패 후 폴백 자격을 얻어 넘어온 경우, 폴백 전환 감사 로그 기록
         if is_fallback:
             fallback_attempted = True
             log_event(
@@ -549,7 +551,9 @@ async def generate_answer(
             # 지수 백오프(Exponential Backoff): 재시도 횟수에 비례해 점진적으로 대기시간을 늘려 서버 회복 유도
             await asyncio.sleep(min(0.5 * (attempt + 1), max(0.0, remaining() - 0.5)))
 
-        # 발생한 에러가 다른 모델로 바꾼다고 해결될 성질이 아닌 경우(예: 유해성 차단 등) 폴백 루프 즉시 중단
+        # [루프 하단 관문: 1회차 주 모델 실패 후 다음 2회차 폴백으로 넘어갈 자격이 있는지 가장 먼저 심사]
+        # 발생한 에러가 다른 모델로 바꾼다고 해결될 성질이 아닌 경우(예: 유해성 차단, API 키 오류 등) 폴백 루프 즉시 중단
+        # (이 심사를 통과해야만 루프 상단의 2회차 폴백 예산 검사 및 실행 단계로 진입함)
         if last_code not in FALLBACK_TRIGGERS:
             break
 

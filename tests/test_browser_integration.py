@@ -422,6 +422,10 @@ def test_auth_form_uses_same_limits(browser_page, mode):
     page.locator(f'[data-tab="{mode}"]').click()
     if mode == "signup":
         page.locator(".auth-confirm").fill("test-only-123")
+    else:
+        expect(page.locator(".auth-password")).to_have_attribute("placeholder", "비밀번호를 입력하세요")
+        page.locator(".auth-submit").click()
+        expect(page.locator(".auth-status")).to_have_text("로그인에 실패했습니다.")
 
     for name, password, message in [
         ("ab", "test-only-123", "3~50자"),
@@ -430,12 +434,13 @@ def test_auth_form_uses_same_limits(browser_page, mode):
         ("valid-id", "1234567", "8자 이상"),
         ("valid-id", "🙂" * 7, "8자 이상"),
         ("valid-id", " " * 8, "비밀번호를 입력"),
-        ("valid-id", "가" * 25, "72바이트"),
+        ("valid-id", "가" * 25, "비밀번호가 너무 깁니다"),
+        ("valid-id", "a" * 73, "비밀번호가 너무 깁니다"),
     ]:
         page.locator(".auth-name").fill(name)
         page.locator(".auth-password").fill(password)
         page.locator(".auth-submit").click()
-        expect(page.locator(".auth-status")).to_contain_text(message)
+        expect(page.locator(".auth-status")).to_contain_text(message if mode == "signup" else "로그인에 실패했습니다.")
     assert not requests
 
     page.locator(".auth-name").fill(f" {user_id} ")
@@ -496,7 +501,7 @@ def test_signup_auto_login_validation_and_reload(browser_page, database):
     with page.expect_response("**/auth/login") as response:
         page.locator(".auth-submit").click()
     assert response.value.status == 401
-    expect(page.locator(".auth-status")).to_contain_text("비밀번호")
+    expect(page.locator(".auth-status")).to_have_text("로그인에 실패했습니다.")
     expect(page.locator(".auth-submit")).to_be_enabled()
     page.locator(".auth-password").fill("test-only-123")
     page.locator(".auth-submit").click()
@@ -553,7 +558,7 @@ def test_auth_storage_failures_show_error_without_retaining_login(browser_page):
     page.locator(".auth-name").fill("alice")
     page.locator(".auth-password").fill("test-only-123")
     page.locator(".auth-submit").click()
-    expect(page.locator(".auth-status")).to_contain_text("로그인 정보를 저장하지 못했습니다")
+    expect(page.locator(".auth-status")).to_have_text("서버 상태가 좋지 않습니다. 잠시 후 다시 시도해 주세요.")
     expect(page.locator(".auth-submit")).to_be_enabled()
     expect(page.locator(".header-user")).to_be_hidden()
     assert page.evaluate("localStorage.getItem('access_token')") is None
@@ -576,3 +581,37 @@ def test_auth_storage_failures_show_error_without_retaining_login(browser_page):
     page.locator(".auth-submit").click()
     expect(page.locator(".header-user")).to_have_text("alice")
     expect(page.locator(".auth-dialog")).not_to_be_visible()
+
+
+@pytest.mark.parametrize("kind", [401, 422, 429, 500, 503, "network", "timeout", "invalid-json", "invalid-token"])
+def test_login_shows_only_public_error_messages(browser_page, kind):
+    from playwright.sync_api import expect
+
+    page = browser_page
+
+    def reply(route):
+        if isinstance(kind, int):
+            route.fulfill(status=kind, json={"message": "private-error UTF-8 72바이트"})
+        elif kind == "network":
+            route.abort()
+        elif kind == "invalid-json":
+            route.fulfill(status=200, body="private-error")
+        elif kind == "invalid-token":
+            route.fulfill(json={"token": "broken"})
+
+    page.route("**/auth/login", reply)
+    if kind == "timeout":
+        page.clock.install()
+    page.locator(".login-button").click()
+    page.locator(".auth-name").fill("alice")
+    page.locator(".auth-password").fill("test-only-123")
+    with page.expect_request("**/auth/login"):
+        page.locator(".auth-submit").click()
+    if kind == "timeout":
+        page.clock.fast_forward(30_001)
+
+    message = "로그인에 실패했습니다." if kind in (401, 422) else "서버 상태가 좋지 않습니다. 잠시 후 다시 시도해 주세요."
+    expect(page.locator(".auth-status")).to_have_text(message)
+    expect(page.locator(".auth-submit")).to_be_enabled()
+    expect(page.locator(".header-user")).to_be_hidden()
+    assert page.evaluate("localStorage.getItem('access_token')") is None

@@ -185,6 +185,7 @@ def test_history_error_and_response_contract(client, auth_headers, ai_mock, monk
 
 
 @pytest.mark.parametrize("payload", [
+    {},
     {"id": "", "pw": "valid-password"}, {"id": "  ", "pw": "valid-password"},
     {"id": "a" * 51, "pw": "valid-password"}, {"id": 123, "pw": "valid-password"},
     {"id": "new", "pw": ""}, {"id": "new", "pw": "   "},
@@ -196,6 +197,10 @@ def test_auth_validation(client, payload):
         assert response.status_code == 422
         assert response.json()["error_code"] == "INVALID_INPUT"
         assert "input" not in response.json()
+        assert "UTF-8" not in response.json()["message"]
+        assert "바이트" not in response.json()["message"]
+        if endpoint == "/auth/login":
+            assert response.json()["message"] == "로그인에 실패했습니다."
 
 
 @pytest.mark.parametrize("endpoint", ["/auth/register", "/auth/login"])
@@ -232,6 +237,7 @@ def test_auth_boundaries_duplicate_and_wrong_credentials(client, user_id, passwo
         response = client.post("/auth/login", json=invalid)
         assert response.status_code == 401
         assert response.json()["error_code"] == "UNAUTHORIZED"
+        assert response.json()["message"] == "로그인에 실패했습니다."
 
 
 def test_registration_without_signing_key_does_not_create_user(client, database, monkeypatch):
@@ -286,6 +292,7 @@ def test_auth_database_failure_and_unexpected_error(client, monkeypatch):
     response = client.post("/auth/login", json={"id": "alice", "pw": "test-password"})
     assert response.status_code == 503
     assert response.json()["error_code"] == "DB_UNAVAILABLE"
+    assert response.json()["message"] == "서버 상태가 좋지 않습니다. 잠시 후 다시 시도해 주세요."
     def broken_hash(password):
         raise RuntimeError("private-error")
 
@@ -294,6 +301,23 @@ def test_auth_database_failure_and_unexpected_error(client, monkeypatch):
     assert response.status_code == 500
     assert response.json()["error_code"] == "INTERNAL_ERROR"
     assert "private-error" not in response.text
+
+
+@pytest.mark.parametrize("kind,status", [("missing-key", 503), ("bad-hash", 503), ("unexpected", 500)])
+def test_login_server_errors_hide_details(client, monkeypatch, kind, status):
+    if kind == "missing-key":
+        monkeypatch.setattr(security, "KEY", None)
+    elif kind == "unexpected":
+        def broken_verify(*args):
+            raise RuntimeError("private-error")
+
+        monkeypatch.setattr(auth, "verify_password", broken_verify)
+
+    response = client.post("/auth/login", json={"id": "alice", "pw": "test-password"})
+    assert response.status_code == status
+    assert response.json()["message"] == "서버 상태가 좋지 않습니다. 잠시 후 다시 시도해 주세요."
+    assert "private-error" not in response.text
+    assert "token" not in response.json()
 
 
 def test_malformed_json_uses_common_error_format(client, auth_headers):

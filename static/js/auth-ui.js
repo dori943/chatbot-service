@@ -4,6 +4,11 @@ import { toast } from './toast.js'
 const $  = selector => document.querySelector(selector)
 const $$ = selector => document.querySelectorAll(selector)
 
+const errors = {
+    login  : '로그인에 실패했습니다.',
+    server : '서버 상태가 좋지 않습니다. 잠시 후 다시 시도해 주세요.',
+}
+
 export let auth = null
 
 let signup        = false
@@ -75,10 +80,11 @@ const setAuthMode = value => {
     $$('[data-tab]').forEach(tab => tab.classList.toggle('active', (tab.dataset.tab === 'signup') === signup))
 
     $('.auth-title')    .textContent  = signup ? '새로운 대화를 시작해요.' : '다시 만나 반가워요.'
+    $('.auth-form')     .noValidate   = !signup
     $('.confirm-wrap')  .hidden       = !signup
     $('.auth-confirm')  .required     = signup
     $('.auth-password') .autocomplete = signup ? 'new-password' : 'current-password'
-    $('.auth-password') .placeholder  = '8자 이상, UTF-8 72바이트 이내'
+    $('.auth-password') .placeholder  = signup ? '8자 이상으로 입력해주세요.' : '비밀번호를 입력하세요'
     $('.auth-submit')   .textContent  = signup ? '회원가입' : '로그인'
     $('.auth-status')   .textContent  = ''
 }
@@ -100,10 +106,10 @@ const submitAuth = async event => {
     const status   = $('.auth-status')
     const idLength = Array.from(id).length
 
-    if (idLength < 3 || idLength > 50)             return status.textContent = '아이디는 3~50자로 입력해 주세요.'
-    if (!pw.trim())                                return status.textContent = '비밀번호를 입력해 주세요.'
-    if (Array.from(pw).length < 8)                 return status.textContent = '비밀번호는 8자 이상으로 입력해 주세요.'
-    if (new TextEncoder().encode(pw).length > 72)  return status.textContent = '비밀번호는 UTF-8 기준 72바이트 이내로 입력해 주세요.'
+    if (idLength < 3 || idLength > 50)             return status.textContent = signup ? '아이디는 3~50자로 입력해 주세요.' : errors.login
+    if (!pw.trim())                                return status.textContent = signup ? '비밀번호를 입력해 주세요.' : errors.login
+    if (Array.from(pw).length < 8)                 return status.textContent = signup ? '비밀번호는 8자 이상으로 입력해 주세요.' : errors.login
+    if (new TextEncoder().encode(pw).length > 72)  return status.textContent = signup ? '비밀번호가 너무 깁니다. 더 짧게 입력해 주세요.' : errors.login
     if (signup && pw !== $('.auth-confirm').value) return status.textContent = '비밀번호가 서로 다릅니다.'
 
     const request = { controller: new AbortController(), token: auth?.token ?? null }
@@ -119,15 +125,16 @@ const submitAuth = async event => {
         if (request.token !== (token === rejectedToken ? null : token)) return
 
         try   { localStorage.setItem('access_token', data.token) }
-        catch { return status.textContent = '로그인 정보를 저장하지 못했습니다. 브라우저 저장소 설정을 확인해 주세요.' }
+        catch { return status.textContent = signup ? '로그인 정보를 저장하지 못했습니다. 브라우저 저장소 설정을 확인해 주세요.' : errors.server }
         rejectedToken = null
         syncAuthState('login')
-        if (!auth) return status.textContent = '유효한 로그인 정보를 받지 못했습니다. 다시 시도해 주세요.'
+        if (!auth) return status.textContent = signup ? '유효한 로그인 정보를 받지 못했습니다. 다시 시도해 주세요.' : errors.server
 
         $('.auth-dialog').close()
     } catch (error) {
         if (pendingAuth === request && $('.auth-dialog').open && error.name !== 'AbortError') {
-            status.textContent = error.message || '인증 요청에 실패했습니다.'
+            if (signup) status.textContent = error.message || '인증 요청에 실패했습니다.'
+            else status.textContent = [400, 401, 403, 422].includes(error.status) ? errors.login : errors.server
         }
     } finally {
         if (pendingAuth === request) {

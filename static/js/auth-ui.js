@@ -1,9 +1,6 @@
 import { request_auth, getTokenID, removeToken } from './auth-service.js'
 
-// 선택자와 일치하는 첫 번째 요소를 가져온다.
 const $  = selector => document.querySelector(selector)
-
-// 선택자와 일치하는 모든 요소를 가져온다.
 const $$ = selector => document.querySelectorAll(selector)
 
 export let auth = null

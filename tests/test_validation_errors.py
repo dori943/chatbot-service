@@ -10,6 +10,7 @@ from app.models.chatlog     import ChatLog
 from app.models.login       import Login
 from app.schemas.chat       import AIResult
 from app.services           import auth
+from app.utils              import security
 
 
 @pytest.mark.parametrize("payload", [
@@ -184,8 +185,8 @@ def test_history_error_and_response_contract(client, auth_headers, ai_mock, monk
 
 
 @pytest.mark.parametrize("payload", [
-    {"id": "", "pw": "valid"}, {"id": "  ", "pw": "valid"},
-    {"id": "a" * 51, "pw": "valid"}, {"id": 123, "pw": "valid"},
+    {"id": "", "pw": "valid-password"}, {"id": "  ", "pw": "valid-password"},
+    {"id": "a" * 51, "pw": "valid-password"}, {"id": 123, "pw": "valid-password"},
     {"id": "new", "pw": ""}, {"id": "new", "pw": "   "},
     {"id": "new", "pw": "가" * 25}, {"id": "new", "pw": "a" * 73},
 ])
@@ -197,13 +198,14 @@ def test_auth_validation(client, payload):
         assert "input" not in response.json()
 
 
+@pytest.mark.parametrize("endpoint", ["/auth/register", "/auth/login"])
 @pytest.mark.parametrize("payload", [
     {"id": "ab", "pw": "12345678"}, {"id": " ab ", "pw": "12345678"},
     {"id": "가나", "pw": "12345678"}, {"id": "new", "pw": "1234567"},
     {"id": "new", "pw": "🙂" * 7},
 ])
-def test_registration_rejects_short_credentials(client, database, payload):
-    response = client.post("/auth/register", json=payload)
+def test_auth_rejects_short_credentials(client, database, endpoint, payload):
+    response = client.post(endpoint, json=payload)
     assert response.status_code == 422
     assert response.json()["error_code"] == "INVALID_INPUT"
     with database() as db:
@@ -211,28 +213,46 @@ def test_registration_rejects_short_credentials(client, database, payload):
 
 
 @pytest.mark.parametrize("user_id,password", [
-    (" abc ", "12345678"), ("가나다", "🙂" * 8), ("a" * 50, "가" * 24),
+    (" abc ", "12345678"), ("가나다", "🙂" * 8), ("🙂" * 50, "가" * 24),
 ])
 def test_auth_boundaries_duplicate_and_wrong_credentials(client, user_id, password):
     credentials = {"id": user_id, "pw": password, "admin": True}
-    assert client.post("/auth/register", json=credentials).status_code == 200
+    response = client.post("/auth/register", json=credentials)
+    assert response.status_code == 200
+    assert response.json()["token_type"] == "bearer"
+    headers = {"Authorization": f"Bearer {response.json()['token']}"}
+    history = client.get("/api/me/chats", headers=headers)
+    assert history.status_code == 200
+    assert history.json() == []
     assert client.post("/auth/login", json=credentials).status_code == 200
     response = client.post("/auth/register", json=credentials)
     assert response.status_code == 409
     assert response.json()["error_code"] == "USER_ALREADY_EXISTS"
-    for invalid in ({**credentials, "pw": "wrong"}, {"id": "not-found", "pw": "wrong"}):
+    for invalid in ({**credentials, "pw": "wrong-password"}, {"id": "not-found", "pw": "wrong-password"}):
         response = client.post("/auth/login", json=invalid)
         assert response.status_code == 401
         assert response.json()["error_code"] == "UNAUTHORIZED"
 
 
-def test_existing_short_credentials_can_still_log_in(client, database):
+def test_registration_without_signing_key_does_not_create_user(client, database, monkeypatch):
+    monkeypatch.setattr(security, "KEY", None)
+    response = client.post("/auth/register", json={"id": "new-user", "pw": "test-password"})
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "AUTH_UNAVAILABLE"
+    assert "token" not in response.json()
     with database() as db:
-        db.add(Login(id="ab", pw=auth.hash_password("short")))
+        assert db.get(Login, "new-user") is None
+
+
+@pytest.mark.parametrize("user_id,password", [("ab", "test-password"), ("valid-id", "short")])
+def test_existing_accounts_use_same_login_limits(client, database, user_id, password):
+    with database() as db:
+        db.add(Login(id=user_id, pw=auth.hash_password(password)))
         db.commit()
-    response = client.post("/auth/login", json={"id": " ab ", "pw": "short"})
-    assert response.status_code == 200
-    assert response.json()["token"]
+    response = client.post("/auth/login", json={"id": user_id, "pw": password})
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+    assert "token" not in response.json()
 
 
 @pytest.mark.parametrize("user_id", ["space user", "a" * 50], ids=["internal-space", "max-length"])
@@ -263,7 +283,7 @@ def test_auth_normalizes_id_without_changing_password(client, database, user_id)
 
 def test_auth_database_failure_and_unexpected_error(client, monkeypatch):
     monkeypatch.setattr(AsyncSession, "get", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
-    response = client.post("/auth/login", json={"id": "alice", "pw": "test"})
+    response = client.post("/auth/login", json={"id": "alice", "pw": "test-password"})
     assert response.status_code == 503
     assert response.json()["error_code"] == "DB_UNAVAILABLE"
     def broken_hash(password):

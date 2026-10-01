@@ -124,7 +124,7 @@ async def test_register_login_and_unpaginated_history(database, monkeypatch):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         credentials = {"id": "한글사용자", "pw": "test-only-password"}
         assert (await client.post("/auth/register", json=credentials)).status_code == 200
-        failed = await client.post("/auth/login", json={**credentials, "pw": "wrong"})
+        failed = await client.post("/auth/login", json={**credentials, "pw": "wrong-password"})
         assert failed.status_code == 401
         assert failed.json()["error_code"] == "UNAUTHORIZED"
         response = await client.post("/auth/login", json=credentials)

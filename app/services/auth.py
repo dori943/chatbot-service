@@ -23,18 +23,18 @@ async def check_user(user_id: str, db: AsyncSession) -> bool:
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "로그인 정보를 확인하지 못했습니다.") from None
 
 
-def validate_auth(data: AuthRequest, signup: bool = False):
+def validate_auth(data: AuthRequest):
     data.id = data.id.strip()
-    if not data.id:                       raise APIError(422, ErrorCode.INVALID_INPUT, "아이디를 입력해 주세요.")
-    if signup and len(data.id) < 3:       raise APIError(422, ErrorCode.INVALID_INPUT, "아이디는 3자 이상으로 입력해 주세요.")
-    if len(data.id) > 50:                 raise APIError(422, ErrorCode.INVALID_INPUT, "아이디는 50자 이내로 입력해 주세요.")
+    if not 3 <= len(data.id) <= 50:       raise APIError(422, ErrorCode.INVALID_INPUT, "아이디는 3~50자로 입력해 주세요.")
     if not data.pw.strip():               raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호를 입력해 주세요.")
-    if signup and len(data.pw) < 8:       raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호는 8자 이상으로 입력해 주세요.")
+    if len(data.pw) < 8:                  raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호는 8자 이상으로 입력해 주세요.")
     if len(data.pw.encode("utf-8")) > 72: raise APIError(422, ErrorCode.INVALID_INPUT, "비밀번호는 UTF-8 기준 72바이트 이내로 입력해 주세요.")
 
 
 async def register(data: AuthRequest, db: AsyncSession):
-    validate_auth(data, signup=True)
+    validate_auth(data)
+    if not security.KEY: raise APIError(503, ErrorCode.AUTH_UNAVAILABLE, "인증 서비스를 사용할 수 없습니다.")
+
     password = await run_in_threadpool(hash_password, data.pw)
     user = Login(id=data.id, pw=password)
 
@@ -48,8 +48,14 @@ async def register(data: AuthRequest, db: AsyncSession):
         log_event("auth_register_failed", exc=exc)
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "회원가입을 완료하지 못했습니다.") from None
 
+    token = create_token(user.id)
     log_event("auth_register_success")
-    return {"message": "register success"}
+
+    return {
+        "message"    : "register success",
+        "token"      : token,
+        "token_type" : "bearer"
+    }
 
 
 async def login(data: AuthRequest, db: AsyncSession):

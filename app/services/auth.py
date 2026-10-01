@@ -130,7 +130,12 @@ async def register(data: AuthRequest, db: AsyncSession):
 #      개발자 실수로 인한 사용자 열거(User Enumeration) 보안 취약점 발생을 원천 차단
 #    - [얼리 리턴 수용 방안]: 만약 팀 컨벤션이 가드 절(Guard Clause)을 중시한다면
 #      'if user is None: raise 401'로 얼리 리턴하도록 유연하게 리팩토링 가능 (단, 동일한 401 메시지 유지 필수)
-# 5) JWT 발급: 검증 통과 시 유효기간(60분)이 포함된 Bearer 토큰 생성 및 반환
+# 5) Bcrypt vs JWT의 역할 분담과 협업 메커니즘 (본인 확인 vs 출입 통행증):
+#    - [Bcrypt: 인증(Authentication) 단계]:
+#      로그인 요청 시점에 DB의 암호화 해시와 사용자의 입력 패스워드를 1회성으로 정밀 대조하는 신원 확인 절차
+#    - [JWT: 인가(Authorization) 단계]:
+#      Bcrypt 본인 확인 통과 후, 사용자가 매번 비밀번호를 재입력하지 않도록 유저 ID와 만료시간(60분)을 담아
+#      전자 서명된 통행증(Token)을 발급하여 브라우저 localStorage에 전달. 이후 모든 채팅 API 호출의 신분증으로 활용
 # ==============================================================================
 # 유저 자격증명을 확인하고 JWT 액세스 토큰을 반환하는 비동기 함수
 async def login(data: AuthRequest, db: AsyncSession):

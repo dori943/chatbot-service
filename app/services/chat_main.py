@@ -13,7 +13,7 @@ from app.services           import chat_db, AI_connect
 
 
 async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
-    room_id    = validate_room_id(data)
+    room_id    = validate_room_id(data.room_id)
     room_name  = validate_room_name(data)
     question   = validate_question(data)
     request_id = request_id_context.get() or uuid4().hex
@@ -72,8 +72,8 @@ async def chat(data: ChatRequest, user_id: str, db: AsyncSession):
     }
 
 
-def validate_room_id(data: ChatRequest) -> str:
-    room_id = data.room_id.strip()
+def validate_room_id(room_id: str) -> str:
+    room_id = room_id.strip()
     if not room_id:       raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID를 입력해 주세요.")
     if len(room_id) > 64: raise APIError(422, ErrorCode.INVALID_INPUT, "대화방 ID는 64자 이내로 입력해 주세요.")
     return room_id
@@ -118,8 +118,10 @@ def validate_result(result: AIResult):
     result.user_message = USER_MESSAGES.get(result.error_code, USER_MESSAGES[ErrorCode.UNKNOWN])
 
 
-async def get_my_chat(user_id: str, db: AsyncSession):
-    rows = await chat_db.get_list_chat(user_id, db)
+async def get_my_chat(user_id: str, db: AsyncSession, room_id: str | None = None):
+    if room_id is not None:
+        room_id = validate_room_id(room_id)
+    rows = await chat_db.get_list_chat(user_id, db, room_id)
     return [
         {
             "id"         : row.id,
@@ -132,3 +134,13 @@ async def get_my_chat(user_id: str, db: AsyncSession):
         }
         for row in rows
     ]
+
+
+async def get_my_rooms(user_id: str, db: AsyncSession):
+    rows = await chat_db.get_list_rooms(user_id, db)
+    return [{"room_id": row.room_id, "room_name": row.room_name} for row in rows]
+
+
+async def delete_my_chat(user_id: str, room_id: str, db: AsyncSession):
+    count = await chat_db.delete_room(user_id, validate_room_id(room_id), db)
+    return {"deleted": count}

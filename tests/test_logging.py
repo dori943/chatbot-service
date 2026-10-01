@@ -123,6 +123,20 @@ def test_chat_request_id_matches_logs_response_and_database(client, database, au
     assert_not_logged(app_logs, "private-question", "private-answer", "private-query", "untrusted-request-id", auth_headers["Authorization"])
 
 
+def test_room_deletion_logs_only_owner_room_and_count(client, auth_headers, ai_mock, app_logs):
+    room_id = "room\nlog-check"
+    assert client.post("/api/chat", headers=auth_headers, json={
+        "room_id": room_id, "room_name": "private-title", "question": "private-question",
+    }).status_code == 200
+    app_logs.clear()
+    response = client.delete("/api/me/chats", params={"room_id": room_id}, headers=auth_headers)
+    assert response.status_code == 200
+    entry = next(record for record in records(app_logs) if record.getMessage().startswith("chat_room_deleted"))
+    assert entry.request_id == response.headers["X-Request-ID"]
+    assert entry.getMessage() == "chat_room_deleted user_id='alice' room_id='room\\nlog-check' count=1"
+    assert_not_logged(app_logs, "private-title", "private-question", "테스트 답변", auth_headers["Authorization"])
+
+
 @pytest.mark.parametrize("kind,status,code", [
     ("unauthorized", 401, "UNAUTHORIZED"),
     ("validation", 422, "INVALID_INPUT"),

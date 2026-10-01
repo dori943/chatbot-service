@@ -1,7 +1,7 @@
 import { openLogin } from './auth-ui.js'
 import { setDrawer, renderHistory, copyText } from './chat-room.js'
 import {
-    chats, activeId, pending, updateInput, render,
+    chats, activeId, pending, loading, updateInput, render, loadChat,
     newChat, deleteChat, selectChat, switchChatOwner, handleSubmit
 } from './chat-action.js'
 
@@ -27,13 +27,13 @@ const bindChatEvents = () => {
 
     $$('[data-new]').forEach(button => button.addEventListener('click', newChat))
     $$('[data-prompt]').forEach(button => button.addEventListener('click', () => {
-        if (pending) return
+        if (pending || loading) return
         $('.question').value = button.dataset.prompt
         updateInput()
         $('.question').focus()
     }))
 
-    $('.history-search').addEventListener('input', () => renderHistory(chats, activeId, Boolean(pending)))
+    $('.history-search').addEventListener('input', () => renderHistory(chats, activeId, Boolean(pending || loading?.deleting || loading?.refreshRooms)))
     $('.history-list').addEventListener('click', event => {
         const button = event.target.closest('[data-room]')
         if (button) selectChat(button.dataset.room)
@@ -53,3 +53,4 @@ const bindChatEvents = () => {
 
 bindChatEvents()
 render()
+loadChat(null, true)

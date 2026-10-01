@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MAX_CHATS, request_chat, uid, loadChats, saveChats } from '../static/js/chat-service.js';
+import { MAX_CHATS, request_chat, request_rooms, request_history, request_delete_room, uid, loadRooms, saveRooms } from '../static/js/chat-service.js';
 
 test('로그인 토큰과 질문을 전송하고 답변을 반환한다', async t => {
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -115,42 +115,71 @@ globalThis.localStorage = {
   setItem: (key, value) => storage.set(key, value),
 };
 
-test('게스트와 각 계정의 대화를 분리하고 최근 30개만 보관한다', () => {
+test('계정별 방 목록만 저장하고 질문과 답변은 저장하지 않는다', () => {
   storage.clear();
-  const chats = Array.from({ length: MAX_CHATS + 1 }, (_, index) => ({ id: String(index), title: `방 ${index}`, messages: [] }));
-  assert.equal(saveChats('한글 사용자', chats), true);
-  assert.deepEqual(loadChats('한글 사용자'), chats.slice(0, MAX_CHATS));
-  assert.deepEqual(loadChats('another-user'), []);
-  assert.deepEqual(loadChats(null), []);
-  assert.equal(saveChats(null, [chats[0]]), true);
-  assert.deepEqual(loadChats(null), [chats[0]]);
+  const chats = Array.from({ length: MAX_CHATS + 1 }, (_, index) => ({ id: String(index), title: `방 ${index}`, messages: [{ role: 'user', text: 'private-question' }] }));
+  assert.equal(saveRooms('한글 사용자', chats), true);
+  assert.deepEqual(loadRooms('한글 사용자'), chats.slice(0, MAX_CHATS).map(room => ({ ...room, messages: [] })));
+  assert.deepEqual(loadRooms('another-user'), []);
+  assert.deepEqual(loadRooms(null), []);
+  assert.equal(saveRooms(null, [chats[0]]), true);
+  assert.deepEqual(loadRooms(null), [{ ...chats[0], messages: [] }]);
   assert.equal(storage.has('damda-chat-v1:user:' + encodeURIComponent('한글 사용자')), true);
   assert.equal(storage.has('damda-chat-v1'), true);
+  for (const value of storage.values()) assert.equal(value.includes('private-question'), false);
 });
 
-test('잘못된 저장 데이터는 제외하고 잘린 이모지 제목은 복원한다', () => {
-  const question = '가'.repeat(29) + '🙂 제목 이후 질문';
+test('이전 저장 형식에서 본문을 제거하고 방 정보만 읽는다', () => {
   const saved = [
     null,
-    { id: 'bad', title: 'bad', messages: [{ role: 'system', text: 'bad' }] },
-    { id: 'broken', title: question.slice(0, 30), messages: [{ role: 'user', text: question }] },
+    { id: 'bad', title: 123 },
     { id: 'valid', title: '<b>기존 제목</b>', messages: [{ role: 'assistant', text: '답변' }] },
   ];
   storage.set('damda-chat-v1', JSON.stringify(saved));
-  assert.deepEqual(loadChats(null), [
-    { ...saved[2], title: '가'.repeat(29) + '🙂' }, saved[3],
-  ]);
+  assert.deepEqual(loadRooms(null), [{ id: 'valid', title: '<b>기존 제목</b>', messages: [] }]);
+  assert.deepEqual(JSON.parse(storage.get('damda-chat-v1')), [{ id: 'valid', title: '<b>기존 제목</b>' }]);
   for (const invalid of ['{', '{}', 'null']) {
     storage.set('damda-chat-v1', invalid);
-    assert.deepEqual(loadChats(null), []);
+    assert.deepEqual(loadRooms(null), []);
   }
 });
 
 test('저장소 접근 실패 시 읽기는 빈 목록, 쓰기는 실패를 반환한다', t => {
   t.mock.method(localStorage, 'getItem', () => { throw new Error('blocked'); });
   t.mock.method(localStorage, 'setItem', () => { throw new Error('blocked'); });
-  assert.deepEqual(loadChats('alice'), []);
-  assert.equal(saveChats('alice', []), false);
+  assert.deepEqual(loadRooms('alice'), []);
+  assert.equal(saveRooms('alice', []), false);
+});
+
+test('방 목록과 방별 기록은 인증된 GET 요청으로 매번 조회한다', async t => {
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    urls.push(url);
+    assert.equal(options.method, 'GET');
+    assert.equal(options.cache, 'no-store');
+    assert.equal(options.body, undefined);
+    assert.equal(options.headers.Authorization, 'Bearer token');
+    return Response.json(url === '/api/me/rooms'
+      ? [{ room_id: 'room / 한글', room_name: '제목' }]
+      : [{ question: '최근 질문', answer: '최근 답변' }, { question: '이전 질문', answer: '이전 답변' }]);
+  });
+  assert.deepEqual(await request_rooms('token'), [{ id: 'room / 한글', title: '제목', messages: [] }]);
+  const messages = await request_history('room / 한글', 'token');
+  assert.deepEqual(messages.map(message => message.text), ['이전 질문', '이전 답변', '최근 질문', '최근 답변']);
+  await request_history('room / 한글', 'token');
+  assert.equal(urls.length, 3);
+  assert.equal(urls[1], '/api/me/chats?room_id=' + encodeURIComponent('room / 한글'));
+});
+
+test('방 삭제는 인증된 DELETE 요청으로 서버에 전달한다', async t => {
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, '/api/me/chats?room_id=room-a');
+    assert.equal(options.method, 'DELETE');
+    assert.equal(options.body, undefined);
+    assert.equal(options.headers.Authorization, 'Bearer token');
+    return Response.json({ deleted: 3 });
+  });
+  assert.equal((await request_delete_room('room-a', 'token')).data.deleted, 3);
 });
 
 test('UUID API가 없어도 유효한 방 ID를 만든다', t => {

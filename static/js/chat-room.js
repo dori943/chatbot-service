@@ -12,15 +12,16 @@ export const setDrawer = open => {
 }
 
 // 요청 중 입력과 대화 변경을 잠그고 중지 버튼을 표시한다.
-export const setBusy = busy => {
+export const setBusy = (busy, loading = false) => {
     $('.send-button').hidden   = busy
+    $('.send-button').disabled = loading
     $('.stop-button').hidden   = !busy
-    $('.question')   .disabled = busy
-    $('.retry')      .disabled = busy
+    $('.question')   .disabled = busy || loading
+    $('.retry')      .disabled = busy || loading
 
-    $('.chat-form')  .setAttribute('aria-busy', String(busy))
-    $('.transcript') .setAttribute('aria-busy', String(busy))
-    $$('[data-new], [data-prompt], .delete-chat').forEach(button => button.disabled = busy)
+    $('.chat-form')  .setAttribute('aria-busy', String(busy || loading))
+    $('.transcript') .setAttribute('aria-busy', String(busy || loading))
+    $$('[data-new], [data-prompt], .delete-chat').forEach(button => button.disabled = busy || loading)
 }
 
 // 처리 상태와 재시도·로그인 안내를 표시한다.

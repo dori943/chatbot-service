@@ -5,6 +5,7 @@ import threading
 import time
 from datetime           import datetime, timedelta, timezone
 from unittest.mock      import AsyncMock
+from uuid               import uuid4
 
 import jwt
 import pytest
@@ -78,14 +79,13 @@ def test_mobile_drawer_closes_when_switching_to_desktop(browser_page):
     expect(page.locator(".scrim")).to_be_hidden()
 
 
-def test_auth_error_toast_survives_previous_chat_toast_timer(browser_page):
+def test_auth_error_toast_survives_previous_chat_toast_timer(browser_page, ai_mock):
     from playwright.sync_api import expect
 
     page = browser_page
     page.clock.install()
     page.reload()
     set_browser_token(page, security.create_token("alice"))
-    page.route("**/api/chat", lambda route: route.fulfill(json={"answer": "복사할 답변"}))
     page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {
         configurable: true, value: { writeText: async () => {} }
     })""")
@@ -195,42 +195,54 @@ def test_login_room_context_and_owner_switch(database, monkeypatch, browser_page
     assert not errors
 
 
-def test_chat_retry_preserves_rooms_and_renders_plain_text(browser_page):
+def seed_rooms(database, rooms, user_id="alice"):
+    with database() as db:
+        for room in rooms:
+            db.add(ChatLog(
+                user_id=user_id, room_id=room["id"], room_name=room["title"],
+                question=room.get("question", "이전 질문"), answer=room.get("answer", "이전 답변"),
+                status="success", request_id=uuid4().hex, created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            ))
+        db.commit()
+
+
+def test_chat_retry_preserves_rooms_and_renders_plain_text(browser_page, database, ai_mock):
     from playwright.sync_api import expect
 
     page = browser_page
-    rooms = [{"id": f"saved-{index}", "title": f"대화 {index}", "messages": []} for index in range(30)]
-    page.evaluate("rooms => localStorage.setItem('damda-chat-v1:user:alice', JSON.stringify(rooms))", rooms)
+    rooms = [{"id": f"saved-{index}", "title": f"대화 {index}"} for index in range(30)]
+    seed_rooms(database, rooms)
     set_browser_token(page, security.create_token("alice"))
     requests = []
     answer = '<img src=x onerror="window.chatInjected=true">'
 
-    def reply(route):
-        requests.append(route.request.post_data_json)
-        if len(requests) == 1:
-            route.fulfill(status=504, json={"error_code": "AI_TIMEOUT", "message": "시간 초과", "request_id": "retry-request"})
-        else:
-            route.fulfill(json={"answer": answer})
+    page.on("request", lambda request: requests.append(request.post_data_json) if request.method == "POST" and request.url.endswith("/api/chat") else None)
 
-    page.route("**/api/chat", reply)
+    async def reply(question, history, **kwargs):
+        if len(requests) == 1:
+            return AIResult(status="timeout", error_code=ErrorCode.TIMEOUT, request_id=kwargs["request_id"], model="test", latency_ms=1)
+        return AIResult(status="success", answer=answer, request_id=kwargs["request_id"], model="test", latency_ms=1)
+
+    ai_mock.side_effect = reply
     page.locator(".question").fill("재시도할 질문")
     page.locator(".send-button").click()
     expect(page.locator(".retry")).to_be_visible()
-    expect(page.locator(".request-id")).to_contain_text("retry-request")
+    expect(page.locator(".request-id")).to_be_visible()
     expect(page.locator(".history-count")).to_have_text("30")
     expect(page.locator(".message")).to_have_count(0)
-    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice'))") == rooms
+    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice'))") == list(reversed(rooms))
 
     page.locator(".retry").click()
     expect(page.locator(".message.assistant .message-text")).to_have_text(answer)
     expect(page.locator(".message.user .copy-button")).to_be_hidden()
     expect(page.locator(".message img")).to_have_count(0)
     expect(page.locator(".question")).to_have_value("")
-    expect(page.locator(".history-count")).to_have_text("30")
+    expect(page.locator(".history-count")).to_have_text("31")
     assert requests[0] == requests[1]
     saved = page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice'))")
     assert saved[0]["id"] == requests[0]["room_id"]
-    assert saved[1:] == rooms[:29]
+    assert saved[1:] == list(reversed(rooms))[:29]
+    assert all(set(room) == {"id", "title"} for room in saved)
 
     page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {
         configurable: true, value: { writeText: async text => { window.copiedText = text; } }
@@ -273,19 +285,22 @@ def test_chat_pending_request_is_cancelled_without_saving(browser_page, action):
     else:
         expect(page.locator(".header-user")).to_have_text("bob")
         expect(page.locator(".question")).to_have_value("")
-    assert page.evaluate("localStorage.getItem('damda-chat-v1:user:alice')") is None
-    assert page.evaluate("localStorage.getItem('damda-chat-v1:user:bob')") is None
+    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice') || '[]')") == []
+    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:bob') || '[]')") == []
 
 
 @pytest.mark.parametrize("next_user", ["alice", "bob"])
-def test_expired_chat_draft_returns_only_to_same_account(browser_page, next_user):
+def test_expired_chat_draft_returns_only_to_same_account(browser_page, database, next_user):
     from playwright.sync_api import expect
 
     page = browser_page
     rooms = [{"id": "saved-room", "title": "기존 대화", "messages": [{"role": "user", "text": "이전 질문"}]}]
+    seed_rooms(database, rooms)
+    seed_rooms(database, [{"id": f"newer-{index}", "title": f"다른 방 {index}"} for index in range(30)])
     page.evaluate("rooms => localStorage.setItem('damda-chat-v1:user:alice', JSON.stringify(rooms))", rooms)
     set_browser_token(page, security.create_token("alice"))
-    page.locator(".history-item").click()
+    page.locator(".history-item").filter(has_text="기존 대화").click()
+    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice')).some(room => room.id === 'saved-room')") is False
     page.locator(".question").fill("작성 중인 질문")
     expired = jwt.encode({"id": "alice", "exp": datetime.now(timezone.utc) - timedelta(seconds=1)}, security.KEY, algorithm="HS256")
     set_browser_token(page, expired)
@@ -296,17 +311,16 @@ def test_expired_chat_draft_returns_only_to_same_account(browser_page, next_user
     set_browser_token(page, security.create_token(next_user))
     expect(page.locator(".header-user")).to_have_text(next_user)
     expect(page.locator(".question")).to_have_value("작성 중인 질문" if next_user == "alice" else "")
-    expect(page.locator(".message")).to_have_count(1 if next_user == "alice" else 0)
+    expect(page.locator(".message")).to_have_count(2 if next_user == "alice" else 0)
     if next_user == "alice":
         expect(page.locator(".conversation-title")).to_have_text("기존 대화")
 
 
-def test_chat_save_failure_keeps_successful_answer_visible(browser_page):
+def test_chat_save_failure_keeps_successful_answer_visible(browser_page, ai_mock):
     from playwright.sync_api import expect
 
     page = browser_page
     set_browser_token(page, security.create_token("alice"))
-    page.route("**/api/chat", lambda route: route.fulfill(json={"answer": "정상 답변"}))
     page.evaluate("""() => {
         const original = Storage.prototype.setItem;
         Storage.prototype.setItem = function(key, value) {
@@ -316,10 +330,10 @@ def test_chat_save_failure_keeps_successful_answer_visible(browser_page):
     }""")
     page.locator(".question").fill("저장 실패 질문")
     page.locator(".send-button").click()
-    expect(page.locator(".message.assistant .message-text")).to_have_text("정상 답변")
+    expect(page.locator(".message.assistant .message-text")).to_have_text("테스트 답변")
     expect(page.locator(".question")).to_have_value("")
     expect(page.locator(".toast")).to_contain_text("저장하지 못했습니다")
-    assert page.evaluate("localStorage.getItem('damda-chat-v1:user:alice')") is None
+    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice') || '[]')") == []
 
 
 def set_browser_token(page, token):
@@ -327,6 +341,142 @@ def set_browser_token(page, token):
         localStorage.setItem('access_token', token);
         window.dispatchEvent(new StorageEvent('storage', {key: 'access_token'}));
     }""", token)
+
+
+def test_completed_history_loads_across_browsers_and_deletes_from_server(browser_page, database, ai_mock):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    seed_rooms(database, [{"id": "server-room", "title": "서버 대화", "question": "서버 질문", "answer": "서버 답변"}])
+    page.evaluate("""() => localStorage.setItem('damda-chat-v1:user:alice', JSON.stringify([
+        {id: 'server-room', title: '낡은 제목', messages: [{role: 'assistant', text: '브라우저에만 있는 답변'}]}
+    ]))""")
+    token = security.create_token("alice")
+    set_browser_token(page, token)
+    page.locator(".history-item").filter(has_text="서버 대화").click()
+    expect(page.locator(".message.assistant .message-text")).to_have_text("서버 답변")
+    assert page.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice'))") == [{"id": "server-room", "title": "서버 대화"}]
+
+    context = page.context.browser.new_context()
+    try:
+        other = context.new_page()
+        other.goto(page.url)
+        assert other.evaluate("localStorage.getItem('damda-chat-v1:user:alice')") is None
+        set_browser_token(other, token)
+        other.locator(".history-item").click()
+        expect(other.locator(".message.assistant .message-text")).to_have_text("서버 답변")
+        ai_mock.assert_not_called()
+
+        other.locator(".question").fill("다른 브라우저 질문")
+        other.locator(".send-button").click()
+        expect(other.locator(".message.assistant .message-text")).to_have_text(["서버 답변", "테스트 답변"])
+        expect(other.locator(".send-button")).to_be_enabled()
+        ai_mock.assert_awaited_once()
+
+        page.locator(".history-item").click()
+        expect(page.locator(".message.user .message-text")).to_have_text(["서버 질문", "다른 브라우저 질문"])
+        expect(page.locator(".send-button")).to_be_enabled()
+        for current in (page, other):
+            assert current.evaluate("JSON.parse(localStorage.getItem('damda-chat-v1:user:alice'))") == [{"id": "server-room", "title": "서버 대화"}]
+
+        with other.expect_response(lambda reply: reply.request.method == "DELETE") as removed:
+            other.locator(".delete-chat").click()
+        assert removed.value.json() == {"deleted": 2}
+        expect(other.locator(".history-count")).to_have_text("0")
+        with database() as db:
+            assert db.query(ChatLog).count() == 0
+        page.reload()
+        expect(page.locator(".send-button")).to_be_enabled()
+        expect(page.locator(".history-count")).to_have_text("0")
+        expect(page.locator(".message")).to_have_count(0)
+    finally:
+        context.close()
+
+
+def test_failed_history_and_delete_do_not_use_local_messages_or_remove_room(browser_page, database):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    seed_rooms(database, [{"id": "server-room", "title": "서버 대화"}])
+    page.evaluate("""() => localStorage.setItem('damda-chat-v1:user:alice', JSON.stringify([
+        {id: 'server-room', title: '서버 대화', messages: [{role: 'assistant', text: '오래된 답변'}]}
+    ]))""")
+    page.route("**/api/me/chats?*", lambda route: route.fulfill(status=503, json={"message": "조회 실패"}))
+    set_browser_token(page, security.create_token("alice"))
+    page.locator(".history-item").click()
+    expect(page.locator(".status")).to_have_text("조회 실패")
+    expect(page.locator(".message")).to_have_count(0)
+    page.unroute("**/api/me/chats?*")
+    page.locator(".history-item").click()
+    expect(page.locator(".message.assistant .message-text")).to_have_text("이전 답변")
+    page.route("**/api/me/chats?*", lambda route: route.fulfill(status=503, json={"message": "삭제 실패"}))
+    page.locator(".delete-chat").click()
+    expect(page.locator(".status")).to_have_text("삭제 실패")
+    expect(page.locator(".history-count")).to_have_text("1")
+    expect(page.locator(".message.assistant .message-text")).to_have_text("이전 답변")
+    with database() as db:
+        assert db.query(ChatLog).count() == 1
+
+
+@pytest.mark.parametrize("next_view", ["room", "account"])
+def test_late_history_does_not_replace_new_room_or_account(browser_page, database, next_view):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    seed_rooms(database, [{"id": "room-a", "title": "방 A"}, {"id": "room-b", "title": "방 B"}])
+    set_browser_token(page, security.create_token("alice"))
+    held = []
+    page.route("**/api/me/chats?room_id=room-a", lambda route: held.append(route))
+    with page.expect_request("**/api/me/chats?room_id=room-a"):
+        page.locator(".history-item").filter(has_text="방 A").click()
+    if next_view == "room":
+        page.locator(".history-item").filter(has_text="방 B").click()
+        expect(page.locator(".conversation-title")).to_have_text("방 B")
+        expect(page.locator(".message.assistant .message-text")).to_have_text("이전 답변")
+    else:
+        set_browser_token(page, security.create_token("bob"))
+        expect(page.locator(".header-user")).to_have_text("bob")
+        expect(page.locator(".history-count")).to_have_text("0")
+    held[0].fulfill(json=[{"question": "늦은 질문", "answer": "다른 화면에 나오면 안 되는 답변"}])
+    expect(page.locator(".send-button")).to_be_enabled()
+    expect(page.locator(".message.assistant .message-text")).to_have_text(["이전 답변"] if next_view == "room" else [])
+
+
+def test_history_failure_after_success_does_not_resend_question(browser_page, database, ai_mock):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    set_browser_token(page, security.create_token("alice"))
+    expect(page.locator(".send-button")).to_be_enabled()
+    page.route("**/api/me/rooms", lambda route: route.fulfill(status=503, json={"message": "목록 조회 실패"}))
+    page.locator(".question").fill("저장된 질문")
+    page.locator(".send-button").click()
+    expect(page.locator(".status")).to_have_text("목록 조회 실패")
+    expect(page.locator(".message.assistant .message-text")).to_have_text("테스트 답변")
+    expect(page.locator(".retry")).to_be_hidden()
+    expect(page.locator(".question")).to_have_value("")
+    ai_mock.assert_awaited_once()
+    with database() as db:
+        assert db.query(ChatLog).one().question == "저장된 질문"
+
+
+def test_initial_room_list_replaces_local_metadata_before_selection(browser_page, database):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    seed_rooms(database, [{"id": "server-room", "title": "서버 대화"}])
+    page.evaluate("""() => localStorage.setItem('damda-chat-v1:user:alice', JSON.stringify([
+        {id: 'old-room', title: '이전 목록'}
+    ]))""")
+    held = []
+    page.route("**/api/me/rooms", lambda route: held.append(route))
+    with page.expect_request("**/api/me/rooms"):
+        set_browser_token(page, security.create_token("alice"))
+    expect(page.locator(".history-item")).to_have_text("이전 목록")
+    expect(page.locator(".history-item")).to_be_disabled()
+    held[0].fulfill(json=[{"room_id": "server-room", "room_name": "서버 대화"}])
+    page.locator(".history-item").filter(has_text="서버 대화").click()
+    expect(page.locator(".message.assistant .message-text")).to_have_text("이전 답변")
 
 
 @pytest.mark.parametrize("kind", ["expired-on-load", "expires-idle", "unauthorized"])
@@ -342,17 +492,16 @@ def test_expiry_and_401_clear_token_and_login_ui(browser_page, ai_mock, kind):
         token = jwt.encode({"id": user_id, "exp": now - timedelta(seconds=1)}, security.KEY, algorithm="HS256")
         page.evaluate("token => localStorage.setItem('access_token', token)", token)
         page.reload()
+    elif kind == "unauthorized":
+        with page.expect_response("**/api/me/rooms") as reply:
+            set_browser_token(page, token)
+        assert reply.value.status == 401
+        expect(page.locator("#status")).to_contain_text("로그인")
     else:
         set_browser_token(page, token)
         expect(page.locator("#header-user")).to_have_text(user_id)
         if kind == "expires-idle":
             page.clock.fast_forward(61_000)
-        else:
-            page.locator("#question").fill("인증 실패 질문")
-            with page.expect_response("**/api/chat") as reply:
-                page.locator("#send").click()
-            assert reply.value.status == 401
-            expect(page.locator("#status")).to_contain_text("로그인")
 
     expect(page.locator("#header-user")).to_be_hidden()
     expect(page.locator(".login-button")).to_have_text("로그인")
@@ -417,6 +566,7 @@ def test_auth_form_uses_same_limits(browser_page, mode):
     requests = []
     user_id = "🙂" * 50
     page.route("**/auth/*", lambda route: route.fulfill(json={"token": security.create_token(user_id)}))
+    page.route("**/api/me/rooms", lambda route: route.fulfill(json=[]))
     page.on("request", lambda request: requests.append(request) if "/auth/" in request.url else None)
     page.locator(".login-button").click()
     page.locator(f'[data-tab="{mode}"]').click()

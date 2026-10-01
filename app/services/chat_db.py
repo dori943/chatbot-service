@@ -1,4 +1,4 @@
-from sqlalchemy             import select
+from sqlalchemy             import select, delete, func
 from sqlalchemy.exc         import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime               import datetime, timezone
@@ -49,9 +49,9 @@ async def save_result(
         ) from None
 
 
-async def get_list_chat(user_id: str, db: AsyncSession):
+async def get_list_chat(user_id: str, db: AsyncSession, room_id: str | None = None):
     try:
-        rows = await db.execute(
+        query = (
             select(
                 ChatLog.id,
                 ChatLog.room_id,
@@ -64,6 +64,9 @@ async def get_list_chat(user_id: str, db: AsyncSession):
             .where(ChatLog.user_id == user_id)
             .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
         )
+        if room_id is not None:
+            query = query.where(ChatLog.room_id == room_id, ChatLog.status == "success")
+        rows = await db.execute(query)
         chats = rows.all()
         await db.commit()
         log_event("chat_list_loaded", count=len(chats))
@@ -72,6 +75,40 @@ async def get_list_chat(user_id: str, db: AsyncSession):
         log_event("chat_list_failed", exc=exc)
         await db.rollback()
         raise APIError(503, ErrorCode.DB_UNAVAILABLE, "대화 기록을 불러오지 못했습니다.") from None
+
+
+async def get_list_rooms(user_id: str, db: AsyncSession):
+    try:
+        latest = (
+            select(func.max(ChatLog.id))
+            .where(ChatLog.user_id == user_id, ChatLog.status == "success")
+            .group_by(ChatLog.room_id)
+        )
+        rows = await db.execute(
+            select(ChatLog.room_id, ChatLog.room_name)
+            .where(ChatLog.id.in_(latest))
+            .order_by(ChatLog.id.desc())
+        )
+        rooms = rows.all()
+        await db.commit()
+        log_event("chat_list_loaded", count=len(rooms))
+        return rooms
+    except SQLAlchemyError as exc:
+        log_event("chat_list_failed", exc=exc)
+        await db.rollback()
+        raise APIError(503, ErrorCode.DB_UNAVAILABLE, "대화방 목록을 불러오지 못했습니다.") from None
+
+
+async def delete_room(user_id: str, room_id: str, db: AsyncSession):
+    try:
+        result = await db.execute(delete(ChatLog).where(ChatLog.user_id == user_id, ChatLog.room_id == room_id))
+        await db.commit()
+        log_event("chat_room_deleted", user_id=user_id, room_id=room_id, count=result.rowcount)
+        return result.rowcount
+    except SQLAlchemyError as exc:
+        log_event("chat_room_delete_failed", exc=exc, user_id=user_id, room_id=room_id)
+        await db.rollback()
+        raise APIError(503, ErrorCode.DB_UNAVAILABLE, "대화방을 삭제하지 못했습니다.") from None
 
 
 async def get_history(

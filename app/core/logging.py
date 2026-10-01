@@ -30,6 +30,8 @@ LOG_EVENTS = {
     "chat_save_failed"           : (logging.ERROR,   ""),
     "chat_list_loaded"           : (logging.INFO,    "count=%(count)d"),
     "chat_list_failed"           : (logging.ERROR,   ""),
+    "chat_room_deleted"          : (logging.INFO,    "user_id=%(user_id)r room_id=%(room_id)r count=%(count)d"),
+    "chat_room_delete_failed"    : (logging.ERROR,   "user_id=%(user_id)r room_id=%(room_id)r"),
     "chat_context_loaded"        : (logging.INFO,    "turns=%(turns)d"),
     "chat_history_load_failed"   : (logging.ERROR,   ""),
     "chat_ai_failed"             : (logging.ERROR,   ""),

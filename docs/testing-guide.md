@@ -4,7 +4,7 @@
 |---|---|
 | 최초 작성자·작성일 | 이건탁 · 2026-09-22 |
 | 최종 수정일 | 2026-10-01 |
-| 대상 브랜치 | `refactor/bsg-back/pattern-refactor` |
+| 대상 브랜치 | `fix/bsg-back/issue-fix` |
 | 실행 검증 | 2026-09-28: MySQL·Chromium pytest 156 passed, 1 deselected / JS 11 passed / 오프라인 AI 스모크 3개 시나리오 통과 |
 | Compose 초기화 검증 | 2026-09-28: 기존 컨테이너·DB 볼륨 제거 후 재생성. 필수 `room_id` 컬럼, 웹 접속·가입·로그인·방 ID 전송·입력 검증 확인. 임시 계정 정리 후 계정·대화 기록 0건 |
 | 인증·AI 오류 보완 검증 | 2026-09-28: 브라우저 7개 사례 통과. 재빌드한 Compose 웹에서도 401 후 토큰 제거·비로그인 전환 확인 |
@@ -22,7 +22,7 @@ pytest 실행 시 의존 라이브러리의 사용 중단 예정 경고 3건이 
 | `requirements-dev.txt` | 앱 의존성과 pytest·httpx·Playwright·python-dotenv |
 | Docker Desktop | 전용 MySQL 8.0 및 앱 Compose 실행 |
 | Playwright Chromium | 브라우저 통합 테스트 |
-| Node.js | `tests/auth-api.test.mjs`, `tests/chat-api.test.mjs` |
+| Node.js | `tests/auth-service.test.mjs`, `tests/chat-service.test.mjs` |
 
 명령 실행 위치는 저장소 루트이며, 셸은 Windows PowerShell 기준이다.
 가상환경 실행 파일을 직접 사용한다. macOS/Linux의 Python 경로는 `.venv/bin/python`이다.
@@ -147,18 +147,19 @@ try {
 |---|---|
 | `test_auth_dependency.py` | 토큰 누락·만료·위조, 사용자 존재 여부, 인증 설정과 DB 오류 |
 | `test_validation_errors.py` | 방 ID·이름 필수·타입·길이·공백 처리, 이름 저장·조회, 질문 경계값, 인증 실패·중복 가입, AI 실패 기록, DB 롤백, 오류 응답 형식 |
-| `test_chat_api.py` | 화면·API 등록, 본인 기록 최신순 조회, 같은 사용자·같은 방의 성공 기록만 문맥에 전달 |
+| `test_chat_api.py` | 본인 방 목록·방별 성공 기록 조회, 방 기록 삭제·사용자 격리, 같은 사용자·같은 방의 성공 기록만 문맥에 전달 |
 | `test_async_chat.py` | AI 대기 중 DB 연결 반환, bcrypt 처리 중 다른 요청, 요청 취소, 롤백 후 재사용, DB 엔진 종료 |
 | `test_logging.py` | 앱 처리 전 수신 로그, 요청 ID 연결·동시 요청 분리, 취소와 완료 구분, 민감정보 제외 |
 | `test_ai_connect.py` | 문맥 순서·길이, AI 오류 분류·대체 모델 호출, 호출 시간 초과와 취소 전파, 키 누락·오류와 생성 한도 종료의 재시도·폴백 차단 |
 | `test_mysql_integration.py` | 초기 테이블과 ORM의 타입 일치, 5,000자·이모지·시간 정밀도, 외래키 제약 |
 | `test_browser_integration.py` | 로그인·방별 대화·DB 저장, 만료 타이머·401에 따른 비로그인 전환, 이전 요청의 401과 새 토큰 구분, AI 오류 시 로그인 유지·실패 기록 저장 |
 | `test_live_ai.py` | 실제 AI 응답과 테스트 DB 저장·조회 |
-| `chat-api.test.mjs` | 토큰·질문·방 ID·이름 전송, 오류 메시지·HTTP 상태 전달, 취소와 시간 초과 구분 |
-| `auth-api.test.mjs` | 토큰 없는 가입·로그인 요청, 인증 성공 응답 검증, 오류 안내, 취소·시간 초과·네트워크 오류 |
+| `chat-service.test.mjs` | 질문 전송·방 목록 및 기록 조회·삭제, 오류와 취소, 방 메타데이터만 저장, 이전 저장 형식의 본문 제거 |
+| `auth-service.test.mjs` | 토큰 없는 가입·로그인 요청, 인증 성공 응답 검증, 오류 안내, 취소·시간 초과·네트워크 오류 |
 
-화면의 대화방 목록은 브라우저 저장소에서 관리하고, 방 ID·이름을 서버로 전송해 문맥을 구분하고 제목을 저장한다.
-서버 대화방 CRUD와 화면·서버 기록 동기화는 검증 범위에 포함되지 않는다.
+브라우저 테스트는 독립된 두 브라우저 저장소에서 같은 서버 기록을 복원하고, 방 재선택 시 최신 기록을 조회하는지 확인한다.
+방 삭제의 DB 반영, 조회·삭제 실패 시 화면 유지, 계정·방 전환 중 이전 조회 응답 무시를 검증한다.
+삭제 로그는 사용자 ID·방 ID·삭제 건수·요청 ID를 포함하고 질문·답변을 제외하는지 확인한다.
 
 ## 실제 Compose 웹 검증
 
@@ -188,7 +189,8 @@ docker compose up --build -d --wait
 | `AI_CONFIG_ERROR`·`AI_TOKEN_LIMIT` | 설정 확인 안내, 로그인 유지, DB 실패 기록 저장 |
 | 브라우저 Console | JavaScript 실행 오류 없음 |
 
-화면은 기록 조회 API를 호출하지 않으므로 API 검증을 별도로 수행한다.
+화면은 `GET /api/me/rooms`, `GET /api/me/chats?room_id=...`로 기록을 복원한다.
+화면의 삭제 버튼은 `DELETE /api/me/chats?room_id=...`를 호출한다.
 
 ### 로그·저장 기록 조회
 

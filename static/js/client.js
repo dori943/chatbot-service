@@ -1,7 +1,7 @@
 const REQUEST_TIMEOUT_MS = 30_000;
 
-// JSON POST 요청을 보내고 응답·오류·취소·시간 초과를 처리한다.
-export const client = async (url, body, { token, signal, errors = {} } = {}) => {
+// JSON 요청을 보내고 응답·오류·취소·시간 초과를 처리한다.
+export const client = async (url, body, { method = 'POST', token, signal, errors = {} } = {}) => {
     // 요청 취소 오류를 발생시킨다.
     const abort_err = () => { throw new DOMException(errors.cancelled, 'AbortError') }
     if (signal?.aborted) abort_err()
@@ -26,7 +26,8 @@ export const client = async (url, body, { token, signal, errors = {} } = {}) => 
         if (token) headers.Authorization = `Bearer ${token}`
 
         response = await fetch(url, {
-            method : 'POST',
+            method,
+            cache  : method === 'GET' ? 'no-store' : 'default',
             headers,
             body   : JSON.stringify(body),
             signal : controller.signal

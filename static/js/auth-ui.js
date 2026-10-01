@@ -1,4 +1,5 @@
 import { request_auth, getTokenID, removeToken } from './auth-service.js'
+import { toast } from './toast.js'
 
 const $  = selector => document.querySelector(selector)
 const $$ = selector => document.querySelectorAll(selector)
@@ -35,8 +36,7 @@ export const syncAuthState = (reason = 'expired') => {
     } catch {
         auth          = null
         rejectedToken = token ?? rejectedToken
-        $('.toast').textContent = '로그인 정보를 확인하거나 삭제하지 못했습니다. 브라우저 저장소 설정을 확인해 주세요.'
-        $('.toast').hidden      = false
+        toast('로그인 정보를 확인하거나 삭제하지 못했습니다. 브라우저 저장소 설정을 확인해 주세요.', 0)
     }
 
     if (token       && token             !== rejectedToken && !auth) reason = 'expired'
@@ -64,8 +64,7 @@ export const clearAuth = (token = auth?.token, reason = 'unauthorized') => {
         removeToken()
     } catch {
         rejectedToken = token ?? rejectedToken
-        $('.toast').textContent = '로그인 정보를 삭제하지 못했습니다. 새로고침하면 이전 정보가 남아 있을 수 있습니다.'
-        $('.toast').hidden      = false
+        toast('로그인 정보를 삭제하지 못했습니다. 새로고침하면 이전 정보가 남아 있을 수 있습니다.', 0)
     }
     syncAuthState(reason)
 }

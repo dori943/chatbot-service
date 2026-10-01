@@ -51,6 +51,60 @@ def browser_page(database):
         assert not thread.is_alive(), "Test server did not stop"
 
 
+def test_mobile_drawer_closes_when_switching_to_desktop(browser_page):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.locator(".menu-button").click()
+    expect(page.locator(".scrim")).to_be_visible()
+    expect(page.locator(".menu-button")).to_have_attribute("aria-expanded", "true")
+
+    page.set_viewport_size({"width": 760, "height": 844})
+    expect(page.locator(".scrim")).to_be_visible()
+    page.set_viewport_size({"width": 761, "height": 844})
+    expect(page.locator(".scrim")).to_be_hidden()
+    expect(page.locator(".menu-button")).to_have_attribute("aria-expanded", "false")
+    expect(page.locator(".sidebar.is-open")).to_have_count(0)
+    page.locator(".login-button").click()
+    expect(page.locator(".auth-dialog")).to_be_visible()
+    page.locator("[data-close]").click()
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    expect(page.locator(".scrim")).to_be_hidden()
+    page.locator(".menu-button").click()
+    expect(page.locator(".scrim")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator(".scrim")).to_be_hidden()
+
+
+def test_auth_error_toast_survives_previous_chat_toast_timer(browser_page):
+    from playwright.sync_api import expect
+
+    page = browser_page
+    page.clock.install()
+    page.reload()
+    set_browser_token(page, security.create_token("alice"))
+    page.route("**/api/chat", lambda route: route.fulfill(json={"answer": "복사할 답변"}))
+    page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {
+        configurable: true, value: { writeText: async () => {} }
+    })""")
+    page.locator(".question").fill("질문")
+    page.locator(".send-button").click()
+    page.locator(".message.assistant .copy-button").click()
+    expect(page.locator(".toast")).to_have_text("답변을 복사했습니다.")
+
+    page.clock.fast_forward(2000)
+    page.evaluate("""() => {
+        Storage.prototype.removeItem = () => { throw new Error('blocked'); };
+    }""")
+    page.locator(".login-button").click()
+    expect(page.locator(".toast")).to_contain_text("로그인 정보를 삭제하지 못했습니다")
+    page.clock.fast_forward(2000)
+    expect(page.locator(".toast")).to_be_visible()
+    expect(page.locator(".header-user")).to_be_hidden()
+
+
 def test_login_room_context_and_owner_switch(database, monkeypatch, browser_page):
     from playwright.sync_api import expect
 

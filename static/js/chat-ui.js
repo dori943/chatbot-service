@@ -46,6 +46,7 @@ const bindChatEvents = () => {
 
     $('.menu-button').addEventListener('click', () => setDrawer(!$('.sidebar').classList.contains('is-open')))
     $('.scrim')      .addEventListener('click', () => setDrawer(false))
+    window.matchMedia('(max-width: 760px)').addEventListener('change', () => setDrawer(false))
     document.addEventListener('keydown', event => { if (event.key === 'Escape') setDrawer(false) })
     window.addEventListener('authchange', event => switchChatOwner(event.detail.id, event.detail.reason))
 }

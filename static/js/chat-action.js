@@ -1,6 +1,7 @@
 import { auth, syncAuthState, clearAuth, openLogin } from './auth-ui.js'
 import { MAX_CHATS, request_chat, uid, loadChats, saveChats } from './chat-service.js'
-import { toast, setDrawer, setBusy, setStatus, renderHistory, renderChat } from './chat-room.js'
+import { setDrawer, setBusy, setStatus, renderHistory, renderChat } from './chat-room.js'
+import { toast } from './toast.js'
 
 const $ = selector => document.querySelector(selector)
 

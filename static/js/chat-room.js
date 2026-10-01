@@ -1,15 +1,7 @@
+import { toast } from './toast.js'
+
 const $  = selector => document.querySelector(selector)
 const $$ = selector => document.querySelectorAll(selector)
-
-let toastTimer = null
-
-// 잠깐 표시할 안내 문구를 띄운다.
-export const toast = text => {
-    clearTimeout(toastTimer)
-    $('.toast').textContent = text
-    $('.toast').hidden      = false
-    toastTimer = setTimeout(() => $('.toast').hidden = true, 3000)
-}
 
 // 모바일 대화 목록을 열거나 닫는다.
 export const setDrawer = open => {

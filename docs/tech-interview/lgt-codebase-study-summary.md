@@ -1,4 +1,4 @@
-# 챗봇 서비스 코드 분석 및 학습 요약 (v1.6)
+# 챗봇 서비스 코드 분석 및 학습 요약 (v1.7)
 
 본 문서는 `c:\dev\7-2\chatbot-service` 프로젝트의 전체적인 아키텍처와 프론트엔드-백엔드 통신 흐름, 그리고 백엔드 핵심 비즈니스 로직(파이프라인, AI 연동, DB 영속화, 자료구조 최적화)을 분석한 내용을 체계적으로 정리한 문서입니다.
 
@@ -16,6 +16,25 @@
 - 채팅 입력을 위한 `<form id="chat-form">`, `<textarea id="question">`, 전송 버튼 렌더링.
 - JavaScript가 DOM 이벤트를 바인딩할 수 있도록 요소별 고유 식별자(`id`) 제공.
 - 상단 `<script type="module" src="/static/js/chat.js">`를 통해 클라이언트 로직 모듈 로드.
+
+### 2-1단계: 프론트엔드 인증 및 모달 제어 (`templates/index.html` & `static/js/auth.js`)
+- **단일 폼 다중 모드 (Single Form Multi-Mode)**:
+  - `<dialog id="auth-dialog">` 네이티브 모달 내에서 단 하나의 `<form id="auth-form">` 인스턴스를 공유.
+  - `[data-tab]` 전환에 따라 `#confirm-wrap`의 가시성(`hidden`) 및 필수 속성(`required`), 엔드포인트(`/auth/login` vs `/auth/register`)를 동적으로 스위칭하여 DOM 중복 제거.
+- **폼 제출 가로채기 (Event Interception - `event.preventDefault`)**:
+  - 브라우저의 기본 폼 제출 동작인 동기식 전송 및 화면 새로고침(Full Page Reload)을 원천 차단.
+  - 화면 깜빡임과 대화 컨텍스트 유실을 방지하고 Fetch API를 통한 무중단 비동기 통신으로 전환.
+- **클라이언트 1차 방어선 (Fail-Fast)**:
+  - 회원가입 모드일 때 비밀번호 일치 검사(`password !== confirm.value`)를 클라이언트에서 0ms 만에 수행하여 불량 요청의 서버 전송 차단.
+- **다국어 UTF-8 지원 JWT 디코딩**:
+  - `atob()`의 한글/다국어 깨짐(Mojibake) 방지를 위해 `Uint8Array` 및 `TextDecoder`를 결합하여 안전하게 클레임 파싱.
+  - `getAuthenticatedId()`: 토큰 만료 여부(`exp * 1000 <= Date.now()`) 및 ID 데이터 형식(Type) 검증.
+- **이벤트 기반 디커플링 (`notifyAuthChange`)**:
+  - `CustomEvent('authchange')`를 전역 window에 발행하여 `auth.js`와 `chat.js` 간의 직접적인 의존성(강한 결합)을 완전히 분리.
+- **안정성 최적화**:
+  - `setTimeout`의 32비트 부호 있는 정수 오버플로우 방어 (`Math.min(..., 2_147_483_647)`).
+  - 지연 도착한 401 응답이 새로 로그인한 세션을 날리지 못하도록 막는 경쟁 상태 방어 로그아웃(`clearAuth`).
+  - 브라우저 탭 간 실시간 세션 동기화(`window.addEventListener('storage')`).
 
 ### 3단계: 프론트엔드 이벤트 제어 및 통신 (`static/js/chat.js` & `chat-api.js`)
 - **이벤트 바인딩 (`bindChatEvents`)**: DOM의 `#chat-form` 제출(submit) 및 Enter 키 입력 이벤트를 감지하여 핸들러로 위임.
@@ -171,7 +190,12 @@ SQLAlchemy 비동기 세션(`AsyncSession`)을 활용하여 채팅 데이터의 
     - `auth.login()`에서 `if not valid:` 비즈니스 조건 분기를 `try` 블록 밖으로 분리한 이유.
     - 실제 `ValueError`를 발생시킬 수 있는 Bcrypt 연산만 `try`에 격리하여, 단순 비밀번호 오타(401 UNAUTHORIZED 정상 비즈니스 분기)와 DB 해시 손상(503 AUTH_UNAVAILABLE 시스템 결함)의 성격을 명확히 분리.
     - `try` 블록 비대화로 인해 401 비즈니스 예외가 `except ValueError`에 가로채져 503 서버 장애로 둔갑하는 예외 마스킹(버그 은닉)을 원천 차단.
+12. **프론트엔드 폼 제출 가로채기(Event Interception)와 브라우저 상태 동기화**:
+    - **`event.preventDefault()`**: HTML `<form>`의 기본 동작인 동기식 전체 새로고침(Full Page Reload)을 차단하고, Fetch 비동기 통신으로 주도권을 가로채어 싱글 페이지(SPA) 무중단 사용자 경험 보장.
+    - **클라이언트 1차 방어선 (Client Fail-Fast)**: 불필요한 네트워크 트래픽과 서버 Bcrypt 연산 부하를 막기 위해, 브라우저 단에서 비밀번호 확인 일치(`password !== confirm.value`)를 0ms 만에 선제 검증.
+    - **이벤트 기반 디커플링 (`CustomEvent`)**: `auth.js`와 `chat.js` 간의 직접 함수 호출을 배제하고, `window.dispatchEvent(new CustomEvent('authchange'))`를 통해 옵저버 패턴으로 상태 변경을 전파하여 모듈 간 결합도를 최소화.
+    - **정밀한 브라우저 환경 방어**: 32비트 정수 오버플로우 방어 타이머(`Math.min(..., 2_147_483_647)`), 401 지연 응답에 의한 새 세션 증발 방지(`clearAuth` 경쟁 상태 방어), 그리고 `window storage` 이벤트를 통한 멀티 탭 실시간 동기화 구현.
 
 ---
 *작업 브랜치: `docs/lgt-back/code-analysis`*  
-*문서 버전: v1.6*
+*문서 버전: v1.7*

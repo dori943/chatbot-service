@@ -19,13 +19,8 @@ from app.utils              import security
 # 2) 상태 검증: 탈퇴한 유저나 강제 삭제된 유저의 유효한 토큰 재사용(Replay) 공격을 원천 차단
 # 3) 트랜잭션 조기 종료: 조회 후 즉시 commit()을 호출하여 커넥션 풀에 점유 자원 즉시 반환
 # ==============================================================================
-# 데이터베이스에 해당 유저 아이디가 실존하는지 여부를 반환하는 비동기 함수
-async def check_user(
-    # 조회할 사용자 계정 식별자
-    user_id: str,
-    # 비동기 데이터베이스 세션
-    db: AsyncSession,
-) -> bool:
+# 데이터베이스에 해당 유저 아이디(user_id)가 실존하는지 여부를 반환하는 비동기 함수
+async def check_user(user_id: str, db: AsyncSession) -> bool:
     try:
         # Login 테이블의 Primary Key(id)만 단일 컬럼으로 스칼라 조회 (인덱스 레인지 스캔 최적화)
         existing_id = await db.scalar(select(Login.id).where(Login.id == user_id))
@@ -53,11 +48,8 @@ async def check_user(
 #    - 72바이트를 초과하는 뒷부분은 조용히 잘려나가 무시되므로, 의도치 않은 해시 충돌 취약점 발생 가능
 #    - 이를 방지하기 위해 UTF-8 바이트 기준으로 72바이트 초과 입력을 사전에 엄격히 차단(HTTP 422)
 # ==============================================================================
-# 회원가입 및 로그인 DTO 데이터의 유효성을 검사하는 검증 함수
-def validate_auth(
-    # 검증 대상 인증 요청 객체 (id, pw 포함)
-    data: AuthRequest,
-):
+# 회원가입 및 로그인 DTO 데이터(data)의 유효성을 검사하는 검증 함수
+def validate_auth(data: AuthRequest):
     # 아이디 문자열의 앞뒤 공백 제거
     data.id = data.id.strip()
     # 아이디가 빈 문자열인 경우 유효성 예외 발생
@@ -87,12 +79,7 @@ def validate_auth(
 #      이미 가입된 아이디인 경우 HTTP 409 Conflict (USER_EXISTS)로 정밀 변환
 # ==============================================================================
 # 신규 유저 계정을 생성하고 DB에 등록하는 비동기 함수
-async def register(
-    # 회원가입 요청 DTO
-    data: AuthRequest,
-    # 비동기 데이터베이스 세션
-    db: AsyncSession,
-):
+async def register(data: AuthRequest, db: AsyncSession):
     # 입력 데이터 유효성 검증
     validate_auth(data)
     # CPU 연산 집약적인 비밀번호 해싱을 별도 스레드풀로 오프로딩하여 이벤트 루프 블로킹 방지
@@ -138,12 +125,7 @@ async def register(
 # 5) JWT 발급: 검증 통과 시 유효기간(60분)이 포함된 Bearer 토큰 생성 및 반환
 # ==============================================================================
 # 유저 자격증명을 확인하고 JWT 액세스 토큰을 반환하는 비동기 함수
-async def login(
-    # 로그인 요청 DTO
-    data: AuthRequest,
-    # 비동기 데이터베이스 세션
-    db: AsyncSession,
-):
+async def login(data: AuthRequest, db: AsyncSession):
     # 입력 데이터 정합성 검증
     validate_auth(data)
     # 서버 환경변수에 JWT 서명용 비밀키(SECRET_KEY)가 설정되어 있는지 검증

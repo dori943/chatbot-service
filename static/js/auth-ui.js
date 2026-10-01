@@ -54,9 +54,6 @@ export const syncAuthState = (reason = 'expired') => {
     $('.login-button')    .textContent = auth ? '로그아웃' : '로그인'
     $('.profile .avatar') .textContent = auth ? id[0].toUpperCase() : 'G'
     $('.profile strong')  .textContent = id || '게스트'
-    $('.profile small')   .textContent = auth ? '로그아웃' : '로그인하여 이어가기'
-
-    $('.profile')         .setAttribute('aria-label', auth ? `${id} 계정 로그아웃` : '로그인')
 
     window.dispatchEvent(new CustomEvent('authchange', { detail: { id: id ?? null, reason } }))
     if (auth) timer = setTimeout(syncAuthState, Math.min(auth.exp * 1000 - Date.now(), 2_147_483_647))
@@ -147,11 +144,11 @@ const submitAuth = async event => {
 // 인증 버튼·탭·폼의 이벤트를 연결한다.
 const bindAuthEvents = () => {
     // 로그인 상태에 따라 로그아웃하거나 로그인 창을 연다.
-    $$('[data-auth]').forEach(button => button.addEventListener('click', () => {
+    $('.login-button').addEventListener('click', () => {
         syncAuthState()
         if (auth) clearAuth(auth.token, 'logout')
         else openLogin()
-    }))
+    })
     // 닫기 버튼을 누르면 인증 요청과 창을 닫는다.
     $('[data-close]').addEventListener('click', () => {
         cancelAuthRequest()

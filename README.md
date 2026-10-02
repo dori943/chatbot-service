@@ -2,6 +2,7 @@
 
 로그인한 사용자의 질문을 Gemini API에 전달하고, 방별 대화와 처리 상태를 MySQL에 저장한다. 같은 방의 최근 성공 대화를 다음 질문의 문맥으로 사용한다.
 
+- '담다' 챗봇 서비스 주소: [https://codyssey-chatbot.duckdns.org/](https://codyssey-chatbot.duckdns.org/)
 - 저장소: [dori943/chatbot-service](https://github.com/dori943/chatbot-service)
 - 상세 문서: [변경 명세](docs/refactoring.md) · [테스트 가이드](docs/testing-guide.md) · [협업 규칙](.github/CONTRIBUTING.md)
 

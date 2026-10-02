@@ -1,0 +1,350 @@
+import asyncio
+from unittest.mock          import AsyncMock
+
+import pytest
+from sqlalchemy.exc         import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core               import config
+from app.models.chatlog     import ChatLog
+from app.models.login       import Login
+from app.schemas.chat       import AIResult
+from app.services           import auth
+from app.utils              import security
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"question": ""}, {"question": " \n "}, {"question": "가" * 1001},
+    {"question": None}, {"question": 123}, {"question": []},
+])
+def test_invalid_question_is_rejected_before_ai(client, database, auth_headers, ai_mock, payload):
+    response = client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", **payload}, headers=auth_headers)
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+    assert set(response.json()) == {"error_code", "message", "request_id"}
+    ai_mock.assert_not_called()
+    with database() as db:
+        assert db.query(ChatLog).count() == 0
+
+
+@pytest.mark.parametrize("field,limit", [("room_id", 64), ("room_name", 100)])
+@pytest.mark.parametrize("kind", ["missing", "null", "empty", "blank", "too-long", "number", "list"])
+def test_invalid_room_is_rejected_before_ai(client, database, auth_headers, ai_mock, field, limit, kind):
+    payload = {"room_id": "room-a", "room_name": "Test room", "question": "hi"}
+    values = {"null": None, "empty": "", "blank": " \n ", "too-long": "r" * (limit + 1), "number": 123, "list": []}
+    if kind == "missing":
+        del payload[field]
+    else:
+        payload[field] = values[kind]
+    response = client.post("/api/chat", json=payload, headers=auth_headers)
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+    ai_mock.assert_not_called()
+    with database() as db:
+        assert db.query(ChatLog).count() == 0
+
+
+def test_room_boundaries_and_normalization(client, database, auth_headers, ai_mock):
+    room_id = "r" * 64
+    room_name = "방🙂" * 50
+    response = client.post(
+        "/api/chat",
+        json = {"question": "hi", "room_id": f"  {room_id}  ", "room_name": f"  {room_name}  "},
+        headers = auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["room_id"] == room_id
+    assert response.json()["room_name"] == room_name
+    with database() as db:
+        row = db.query(ChatLog).one()
+        assert (row.room_id, row.room_name) == (room_id, room_name)
+    item = client.get("/api/me/chats", headers=auth_headers).json()[0]
+    assert (item["room_id"], item["room_name"]) == (room_id, room_name)
+
+
+def test_question_boundary_normalization_and_configured_limit(client, database, auth_headers, ai_mock, monkeypatch):
+    response = client.post(
+        "/api/chat",
+        json    = {"room_id": "room-a", "room_name": "Test room", "question": "  " + "가" * 1000 + "  ", "user_id": "bob"},
+        headers = auth_headers,
+    )
+    assert response.status_code == 200
+    assert ai_mock.call_args.kwargs["question"] == "가" * 1000
+    with database() as db:
+        assert db.query(ChatLog).one().question == "가" * 1000
+        assert db.query(ChatLog).one().user_id == "alice"
+    monkeypatch.setattr(config, "MAX_QUESTION_LENGTH", 3)
+    ai_mock.reset_mock()
+    assert client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "four"}, headers=auth_headers).status_code == 422
+    ai_mock.assert_not_called()
+    monkeypatch.setattr(config, "MAX_QUESTION_LENGTH", 5000)
+    assert client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "가" * 1001}, headers=auth_headers).status_code == 422
+    ai_mock.assert_not_called()
+
+
+@pytest.mark.parametrize("code,status,http", [
+    ("AI_TIMEOUT", "timeout", 504), ("AI_RATE_LIMIT", "error", 429),
+    ("AI_BLOCKED", "error", 422), ("AI_CONNECTION_ERROR", "error", 502),
+    ("AI_UPSTREAM_ERROR", "error", 502), ("AI_BAD_REQUEST", "error", 502),
+    ("AI_EMPTY_RESPONSE", "error", 502), ("AI_UNKNOWN_ERROR", "error", 502),
+    ("AI_TOKEN_LIMIT", "error", 502), ("AI_CONFIG_ERROR", "error", 503),
+])
+def test_ai_failure_is_saved_before_error_response(client, database, auth_headers, ai_mock, code, status, http):
+    ai_mock.side_effect = None
+    ai_mock.return_value = AIResult(
+        status       = status,
+        request_id   = "provider-id",
+        model        = "test",
+        latency_ms   = 1,
+        answer       = "discard this failed answer",
+        error_code   = code,
+        user_message = "private-provider-details",
+    )
+    response = client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "hi"}, headers=auth_headers)
+    assert response.status_code == http
+    body = response.json()
+    assert body["error_code"] == code
+    assert body["request_id"]
+    assert "private-provider-details" not in response.text
+    with database() as db:
+        row = db.query(ChatLog).one()
+        assert (row.status, row.error_code, row.answer) == (status, code, None)
+        assert row.request_id == body["request_id"]
+
+
+@pytest.mark.parametrize("answer,code", [
+    (None, "AI_EMPTY_RESPONSE"), (" \n ", "AI_EMPTY_RESPONSE"),
+    (123, "AI_EMPTY_RESPONSE"), ("가" * 5001, "AI_ANSWER_TOO_LONG"),
+], ids=["missing", "blank", "wrong-type", "too-long"])
+def test_invalid_ai_answer_is_not_saved_as_success(client, database, auth_headers, ai_mock, answer, code):
+    ai_mock.side_effect = None
+    ai_mock.return_value = AIResult(
+        status     = "success",
+        request_id = "test",
+        model      = "test",
+        latency_ms = 1,
+        answer     = answer,
+    )
+    response = client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "hi"}, headers=auth_headers)
+    assert response.status_code == 502
+    assert response.json()["error_code"] == code
+    with database() as db:
+        row = db.query(ChatLog).one()
+        assert row.status == "error"
+        assert row.answer is None
+        assert row.error_code == code
+
+
+@pytest.mark.parametrize("kind,code,http", [
+    ("exception", "AI_UNKNOWN_ERROR", 502), ("timeout", "AI_TIMEOUT", 504),
+    ("invalid-result", "AI_UNKNOWN_ERROR", 502),
+])
+def test_unexpected_ai_failures_are_recorded(client, database, auth_headers, ai_mock, monkeypatch, kind, code, http):
+    if kind == "exception":
+        ai_mock.side_effect = RuntimeError("private-provider-error")
+    elif kind == "timeout":
+        async def slow(**kwargs):
+            await asyncio.sleep(10)
+        ai_mock.side_effect = slow
+        monkeypatch.setattr(config, "AI_TOTAL_TIMEOUT_SECONDS", 0.01)
+    else:
+        ai_mock.side_effect = None
+        ai_mock.return_value = None
+    response = client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "hi"}, headers=auth_headers)
+    assert response.status_code == http
+    assert response.json()["error_code"] == code
+    assert "private-provider-error" not in response.text
+    with database() as db:
+        assert db.query(ChatLog).one().error_code == code
+
+
+def test_save_failure_returns_503_and_rolls_back(client, database, auth_headers, ai_mock, monkeypatch):
+    original_commit = AsyncSession.commit
+
+    async def fail_chat_save(db):
+        if any(isinstance(row, ChatLog) for row in db.new):
+            raise SQLAlchemyError("private-sql")
+        await original_commit(db)
+
+    monkeypatch.setattr(AsyncSession, "commit", fail_chat_save)
+    response = client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "hi"}, headers=auth_headers)
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "DB_UNAVAILABLE"
+    assert response.json()["request_id"]
+    assert "private-sql" not in response.text
+    ai_mock.assert_not_called()
+    with database() as db:
+        assert db.query(ChatLog).count() == 0
+
+
+def test_history_error_and_response_contract(client, auth_headers, ai_mock, monkeypatch):
+    assert client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "hi"}, headers=auth_headers).status_code == 200
+    item = client.get("/api/me/chats", headers=auth_headers).json()[0]
+    assert set(item) == {"id", "room_id", "room_name", "question", "answer", "status", "error_code", "created_at"}
+    assert item["created_at"].endswith("Z")
+    monkeypatch.setattr(AsyncSession, "execute", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
+    response = client.get("/api/me/chats", headers=auth_headers)
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "DB_UNAVAILABLE"
+
+
+def test_result_save_failure_preserves_the_accepted_question(client, database, auth_headers, ai_mock, monkeypatch):
+    async def answer(**kwargs):
+        monkeypatch.setattr(AsyncSession, "commit", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
+        return AIResult(status="success", request_id=kwargs["request_id"], model="test", latency_ms=1, answer="answer")
+
+    ai_mock.side_effect = answer
+    response = client.post("/api/chat", headers=auth_headers, json={
+        "room_id": "room-a", "room_name": "Test room", "question": "accepted",
+    })
+    assert response.status_code == 503
+    assert "private-sql" not in response.text
+    with database() as db:
+        row = db.query(ChatLog).one()
+        assert (row.question, row.status, row.answer) == ("accepted", "processing", None)
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    {"id": "", "pw": "valid-password"}, {"id": "  ", "pw": "valid-password"},
+    {"id": "a" * 51, "pw": "valid-password"}, {"id": 123, "pw": "valid-password"},
+    {"id": "new", "pw": ""}, {"id": "new", "pw": "   "},
+    {"id": "new", "pw": "가" * 25}, {"id": "new", "pw": "a" * 73},
+])
+def test_auth_validation(client, payload):
+    for endpoint in ("/auth/register", "/auth/login"):
+        response = client.post(endpoint, json=payload)
+        assert response.status_code == 422
+        assert response.json()["error_code"] == "INVALID_INPUT"
+        assert "input" not in response.json()
+        assert "UTF-8" not in response.json()["message"]
+        assert "바이트" not in response.json()["message"]
+        if endpoint == "/auth/login":
+            assert response.json()["message"] == "로그인에 실패했습니다."
+
+
+@pytest.mark.parametrize("endpoint", ["/auth/register", "/auth/login"])
+@pytest.mark.parametrize("payload", [
+    {"id": "ab", "pw": "12345678"}, {"id": " ab ", "pw": "12345678"},
+    {"id": "가나", "pw": "12345678"}, {"id": "new", "pw": "1234567"},
+    {"id": "new", "pw": "🙂" * 7},
+])
+def test_auth_rejects_short_credentials(client, database, endpoint, payload):
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+    with database() as db:
+        assert db.get(Login, payload["id"].strip()) is None
+
+
+@pytest.mark.parametrize("user_id,password", [
+    (" abc ", "12345678"), ("가나다", "🙂" * 8), ("🙂" * 50, "가" * 24),
+])
+def test_auth_boundaries_duplicate_and_wrong_credentials(client, user_id, password):
+    credentials = {"id": user_id, "pw": password, "admin": True}
+    response = client.post("/auth/register", json=credentials)
+    assert response.status_code == 200
+    assert response.json()["token_type"] == "bearer"
+    headers = {"Authorization": f"Bearer {response.json()['token']}"}
+    history = client.get("/api/me/chats", headers=headers)
+    assert history.status_code == 200
+    assert history.json() == []
+    assert client.post("/auth/login", json=credentials).status_code == 200
+    response = client.post("/auth/register", json=credentials)
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "USER_ALREADY_EXISTS"
+    for invalid in ({**credentials, "pw": "wrong-password"}, {"id": "not-found", "pw": "wrong-password"}):
+        response = client.post("/auth/login", json=invalid)
+        assert response.status_code == 401
+        assert response.json()["error_code"] == "UNAUTHORIZED"
+        assert response.json()["message"] == "로그인에 실패했습니다."
+
+
+def test_registration_without_signing_key_does_not_create_user(client, database, monkeypatch):
+    monkeypatch.setattr(security, "KEY", None)
+    response = client.post("/auth/register", json={"id": "new-user", "pw": "test-password"})
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "AUTH_UNAVAILABLE"
+    assert "token" not in response.json()
+    with database() as db:
+        assert db.get(Login, "new-user") is None
+
+
+@pytest.mark.parametrize("user_id,password", [("ab", "test-password"), ("valid-id", "short")])
+def test_existing_accounts_use_same_login_limits(client, database, user_id, password):
+    with database() as db:
+        db.add(Login(id=user_id, pw=auth.hash_password(password)))
+        db.commit()
+    response = client.post("/auth/login", json={"id": user_id, "pw": password})
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"
+    assert "token" not in response.json()
+
+
+@pytest.mark.parametrize("user_id", ["space user", "a" * 50], ids=["internal-space", "max-length"])
+def test_auth_normalizes_id_without_changing_password(client, database, user_id):
+    padded_id = f" \t{user_id}\n "
+    password = "  spaced-password  "
+    response = client.post("/auth/register", json={"id": padded_id, "pw": password})
+    assert response.status_code == 200
+    with database() as db:
+        assert db.get(Login, user_id).id == user_id
+        assert db.get(Login, padded_id) is None
+
+    for login_id in (user_id, padded_id):
+        response = client.post("/auth/login", json={"id": login_id, "pw": password})
+        assert response.status_code == 200
+        headers = {"Authorization": f"Bearer {response.json()['token']}"}
+        assert client.get("/api/me/chats", headers=headers).status_code == 200
+
+    for duplicate_id in (user_id, padded_id):
+        response = client.post("/auth/register", json={"id": duplicate_id, "pw": password})
+        assert response.status_code == 409
+        assert response.json()["error_code"] == "USER_ALREADY_EXISTS"
+
+    response = client.post("/auth/login", json={"id": user_id, "pw": password.strip()})
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "UNAUTHORIZED"
+
+
+def test_auth_database_failure_and_unexpected_error(client, monkeypatch):
+    monkeypatch.setattr(AsyncSession, "get", AsyncMock(side_effect=SQLAlchemyError("private-sql")))
+    response = client.post("/auth/login", json={"id": "alice", "pw": "test-password"})
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "DB_UNAVAILABLE"
+    assert response.json()["message"] == "서버 상태가 좋지 않습니다. 잠시 후 다시 시도해 주세요."
+    def broken_hash(password):
+        raise RuntimeError("private-error")
+
+    monkeypatch.setattr(auth, "hash_password", broken_hash)
+    response = client.post("/auth/register", json={"id": "new", "pw": "test-password"})
+    assert response.status_code == 500
+    assert response.json()["error_code"] == "INTERNAL_ERROR"
+    assert "private-error" not in response.text
+
+
+@pytest.mark.parametrize("kind,status", [("missing-key", 503), ("bad-hash", 503), ("unexpected", 500)])
+def test_login_server_errors_hide_details(client, monkeypatch, kind, status):
+    if kind == "missing-key":
+        monkeypatch.setattr(security, "KEY", None)
+    elif kind == "unexpected":
+        def broken_verify(*args):
+            raise RuntimeError("private-error")
+
+        monkeypatch.setattr(auth, "verify_password", broken_verify)
+
+    response = client.post("/auth/login", json={"id": "alice", "pw": "test-password"})
+    assert response.status_code == status
+    assert response.json()["message"] == "서버 상태가 좋지 않습니다. 잠시 후 다시 시도해 주세요."
+    assert "private-error" not in response.text
+    assert "token" not in response.json()
+
+
+def test_malformed_json_uses_common_error_format(client, auth_headers):
+    response = client.post(
+        "/api/chat",
+        content = "{",
+        headers = {**auth_headers, "Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_INPUT"

@@ -9,9 +9,9 @@
 
 | 역할 | 담당자 | 주요 책임 | 주 작업 디렉터리 |
 |---|---|---|---|
-| 프론트엔드 | 채민성 | 로그인/회원가입/채팅 UI, 에러 UX, 로그 조회 화면 | `templates/`, `static/` |
-| 백엔드 | 방승규, 이건탁 | 인증·접근제어, DB 모델/조회 API, 로깅, 배포 | `app/routers/`, `app/models/`, `app/core/` |
-| AI 연동 | 김도희 | AI API 호출, 컨텍스트 구성, 타임아웃/예외 처리 | `app/services/ai_service.py` |
+| 프론트엔드 | 채민성 | 로그인/회원가입/채팅 UI, 에러 UX, 대화 기록 표시 | `templates/`, `static/` |
+| 백엔드 | 방승규, 이건탁 | 인증·접근제어, DB 모델/조회 API, 로깅, 배포 | `app/routers/`, `app/services/`, `app/models/`, `app/core/`, `app/utils/` |
+| AI 연동 | 김도희 | AI API 호출, 컨텍스트 구성, 타임아웃/예외 처리 | `app/services/AI_connect.py`, `app/services/prompt.py` |
 
 > ⚠️ 원칙: **다른 사람의 담당 디렉터리를 말없이 수정하지 않습니다.** 필요하면 이슈나 PR 코멘트로 요청합니다.
 
@@ -84,7 +84,7 @@ git push -u origin feat/dh-ai/chat-ui
 ```
 feat: 로그인 API 및 세션 발급 구현
 fix: AI 응답 타임아웃 시 500 에러 나던 문제 수정
-refactor: AI 호출 로직을 ai_service로 분리
+refactor: AI 호출 로직을 AI_connect로 분리
 docs: README에 환경 변수 설정 방법 추가
 chore: .env를 .gitignore에 추가
 ```
@@ -149,41 +149,11 @@ Update main.py            ← 파일명만으로는 의도를 알 수 없음
 
 ## 6. 프로젝트 구조
 
-```
-.
-├── app/
-│   ├── main.py                 # FastAPI 엔트리포인트
-│   ├── core/
-│   │   ├── config.py           # 환경 변수 로드
-│   │   ├── security.py         # 비밀번호 해싱, 세션/토큰
-│   │   └── logging.py          # 로깅 설정
-│   ├── models/                 # SQLAlchemy 모델 (User, ChatLog)
-│   ├── schemas/                # Pydantic 요청/응답 스키마
-│   ├── routers/
-│   │   ├── auth.py             # 회원가입 / 로그인 / 로그아웃
-│   │   └── chat.py             # /api/chat, /api/me/chats
-│   ├── services/
-│   │   └── ai_service.py       # AI API 호출 · 컨텍스트 구성 · 타임아웃
-│   └── db.py                   # DB 세션
-├── templates/                  # Jinja2 템플릿
-├── static/                     # CSS / JS
-├── scripts/
-│   └── check_logs.sql          # 평가용 대화 로그 확인 쿼리
-├── .github/
-│   ├── PULL_REQUEST_TEMPLATE.md
-│   └── ISSUE_TEMPLATE/
-├── data/                    # DB 내용
-├── docker-compose.yml       
-├── Dockerfile               
-├── .dockerignore           
-├── .env.example
-├── .gitignore
-├── requirements.txt
-├── CONTRIBUTING.md
-└── README.md
-```
+폴더별 책임과 실행 구성은 [README의 시스템 구조](../README.md#시스템-구조)를 기준으로 한다.
+백엔드는 라우터·서비스·DB 접근·AI 연결을 분리하며, 프론트는 통신·상태 처리·화면 렌더링·이벤트 연결을 분리한다.
+기존 구조와의 차이는 [변경 명세](../docs/refactoring.md)에 정리한다.
 
-## 6. 환경 변수 & 보안
+## 7. 환경 변수 & 보안
 
 - 모든 민감정보는 `.env`로 관리하고, **저장소에 올리지 않습니다.**
 - 키를 추가했다면 반드시 `.env.example`에 **이름만** 추가하고 커밋합니다.

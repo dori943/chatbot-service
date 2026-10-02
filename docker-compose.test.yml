@@ -1,0 +1,21 @@
+services:
+  db-test:
+    image: mysql:8.0
+    command:
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: integration-test-only
+      MYSQL_DATABASE: chatbot_integration_test
+    ports:
+      - "127.0.0.1:13307:3306"
+    tmpfs:
+      - /var/lib/mysql
+    volumes:
+      - ./data/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s

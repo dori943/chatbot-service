@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS chat_logs (
     user_id     VARCHAR(50) NOT NULL,
     room_id     VARCHAR(64) NOT NULL,
     room_name   VARCHAR(100) NOT NULL,
-    question    VARCHAR(5000) NOT NULL,
+    question    VARCHAR(1000) NOT NULL,
     answer      VARCHAR(5000) NULL,
     status      VARCHAR(20) NOT NULL,
     error_code  VARCHAR(50) NULL,

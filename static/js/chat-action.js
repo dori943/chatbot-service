@@ -5,7 +5,7 @@ import { toast } from './toast.js'
 
 const $ = selector => document.querySelector(selector)
 
-const MAX_QUESTION_LENGTH = 5000
+const MAX_QUESTION_LENGTH = 1000
 const POLL_INTERVAL_MS    = 2000
 const requests           = new Map()
 
@@ -148,7 +148,7 @@ export const updateInput = () => {
     const input = $('.question')
     if (!ownerId && draft) draft.question = input.value
 
-    $('.char-count').textContent = `${Array.from(input.value).length.toLocaleString()} / ${MAX_QUESTION_LENGTH.toLocaleString()}`
+    $('.char-count').textContent = `${input.value.length.toLocaleString()} / ${MAX_QUESTION_LENGTH.toLocaleString()}`
     input.style.height = 'auto'
     input.style.height = Math.min(input.scrollHeight, 150) + 'px'
 }
@@ -271,7 +271,7 @@ export const handleSubmit = async event => {
 
     const question = $('.question').value.trim()
     if (!question) return setStatus('메시지를 입력해 주세요.', 'error')
-    if (Array.from(question).length > MAX_QUESTION_LENGTH) return setStatus('메시지는 5,000자 이내로 입력해 주세요.', 'error')
+    if (Array.from(question).length > MAX_QUESTION_LENGTH) return setStatus('메시지는 1,000자 이내로 입력해 주세요.', 'error')
 
     let current = chats.find(chat => chat.id === activeId)
     if (!current) {

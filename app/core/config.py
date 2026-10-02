@@ -31,7 +31,7 @@ AI_MAX_TOKENS            = _num("AI_MAX_TOKENS", "800", int)
 AI_TEMPERATURE           = _num("AI_TEMPERATURE", "0.7", float)
 
 AI_THINKING_LEVEL        = getenv("AI_THINKING_LEVEL", "low").strip()
-MAX_QUESTION_LENGTH      = _num("MAX_QUESTION_LENGTH", "5000", int)
+MAX_QUESTION_LENGTH      = _num("MAX_QUESTION_LENGTH", "1000", int)
 MAX_CONTEXT_CHARS        = _num("MAX_CONTEXT_CHARS", "6000", int)
 
 # 남은 예산이 이보다 적으면 폴백 호출을 건너뛴다. 제공사 하한보다 짧게 호출하면

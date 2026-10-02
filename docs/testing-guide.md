@@ -4,8 +4,8 @@
 |---|---|
 | 최초 작성자·작성일 | 이건탁 · 2026-09-22 |
 | 최종 수정일 | 2026-10-02 |
-| 대상 브랜치 | `fix/bsg-back/issue-fix` |
-| 전체 회귀 검증 | 2026-10-02: MySQL·Chromium 포함 pytest 248 passed, 실제 AI 호출 1 skipped / JS 34 passed |
+| 대상 브랜치 | `fix/bsg-back/question-column-length` |
+| 전체 회귀 검증 | 2026-10-02: MySQL·Chromium 포함 pytest 250 passed, 실제 AI 호출 1 skipped / JS 34 passed |
 | 5건 조회 검증 | 방별 5건·이전 페이지·삽입 중 중복 및 누락 방지, 스크롤 위치 유지, 짧은 화면 내용의 추가 조회, 조회 실패 재시도, 상태 갱신 시 과거 기록 유지 |
 | SQL 검증 | 실제 MySQL에서 check_logs.sql 전체 실행. processing을 실패와 분리하고 기록 없는 사용자의 집계도 확인 |
 | Compose 웹 검증 | 2026-10-02: backend 재빌드 후 HTTP·OpenAPI·비로그인 401 확인. Chromium에서 5→10→12건 조회·새로고침 후 최근 5건 복원 확인. 이 웹 확인의 기록 응답은 모킹, 개발 DB 유지 |
@@ -152,7 +152,7 @@ try {
 | `test_async_chat.py` | AI 대기 전 질문 저장·DB 연결 반환, 같은 기록의 결과 갱신, 서버 작업 취소 시 실패 기록, 처리 중 삭제 후 재생성 방지, bcrypt 처리 중 다른 요청, 롤백 후 재사용, DB 엔진 종료 |
 | `test_logging.py` | 앱 처리 전 수신 로그, 요청 ID 연결·동시 요청 분리, 취소와 완료 구분, 민감정보 제외 |
 | `test_ai_connect.py` | 문맥 순서·길이, AI 오류 분류·대체 모델 호출, 호출 시간 초과와 취소 전파, 키 누락·오류와 생성 한도 종료의 재시도·폴백 차단 |
-| `test_mysql_integration.py` | 초기 테이블과 ORM의 타입 일치, 5,000자·이모지·시간 정밀도, 외래키 제약, 검증 SQL 실행·상태별 집계 |
+| `test_mysql_integration.py` | 초기 테이블과 ORM의 타입 일치, 질문 1,000자·답변 5,000자·이모지·시간 정밀도, 외래키 제약, 검증 SQL 실행·상태별 집계 |
 | `test_browser_integration.py` | 로그인·방별 대화·DB 저장, 만료 타이머·401에 따른 비로그인 전환, 이전 요청의 401과 새 토큰 구분, AI 오류 시 로그인 유지·실패 기록 저장 |
 | `test_live_ai.py` | 실제 AI 응답과 테스트 DB 저장·조회 |
 | `chat-service.test.mjs` | 질문·방·기록 조회·삭제, 이전 페이지 커서, 과거 기록과 신규·처리 중 기록 병합, 오류·취소, 방 메타데이터만 저장 |

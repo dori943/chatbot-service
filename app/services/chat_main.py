@@ -90,7 +90,7 @@ def validate_question(data: ChatRequest) -> str:
     question = data.question.strip()
     if not question:          raise APIError(422, ErrorCode.INVALID_INPUT, "질문을 입력해 주세요.")
 
-    limit = min(config.MAX_QUESTION_LENGTH, 5000)
+    limit = min(config.MAX_QUESTION_LENGTH, 1000)
     if len(question) > limit: raise APIError(422, ErrorCode.INVALID_INPUT, f"질문은 {limit:,}자 이내로 입력해 주세요.")
     return question
 

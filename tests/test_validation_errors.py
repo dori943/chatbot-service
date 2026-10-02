@@ -77,6 +77,9 @@ def test_question_boundary_normalization_and_configured_limit(client, database, 
     ai_mock.reset_mock()
     assert client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "four"}, headers=auth_headers).status_code == 422
     ai_mock.assert_not_called()
+    monkeypatch.setattr(config, "MAX_QUESTION_LENGTH", 5000)
+    assert client.post("/api/chat", json={"room_id": "room-a", "room_name": "Test room", "question": "가" * 1001}, headers=auth_headers).status_code == 422
+    ai_mock.assert_not_called()
 
 
 @pytest.mark.parametrize("code,status,http", [

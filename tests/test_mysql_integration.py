@@ -28,13 +28,13 @@ def test_init_sql_matches_orm(database):
     assert fk["constrained_columns"] == ["user_id"]
 
 
-def test_mysql_5000_character_boundary(database):
+def test_mysql_question_1000_answer_5000_boundaries(database):
     with database() as db:
         row = ChatLog(
             room_id    = "room-a",
             room_name  = "Test room",
             user_id    = "alice",
-            question   = "가" * 5000,
+            question   = "가" * 1000,
             answer     = "🙂" * 5000,
             status     = "success",
             request_id = uuid4().hex,
@@ -43,10 +43,26 @@ def test_mysql_5000_character_boundary(database):
         db.add(row)
         db.flush()
         db.refresh(row)
-        assert len(row.question) == len(row.answer) == 5000
+        assert len(row.question) == 1000
+        assert len(row.answer) == 5000
         assert row.created_at.microsecond == 123456
+
+
+@pytest.mark.parametrize("field,size", [("question", 1001), ("answer", 5001)])
+def test_mysql_rejects_oversize_chat_text(database, field, size):
+    with database() as db:
+        row = ChatLog(
+            room_id    = "room-a",
+            room_name  = "Test room",
+            user_id    = "alice",
+            question   = "question",
+            status     = "success",
+            request_id = uuid4().hex,
+            created_at = datetime.now(),
+        )
+        setattr(row, field, "가" * size)
+        db.add(row)
         with pytest.raises(DataError):
-            row.answer = "가" * 5001
             db.flush()
         db.rollback()
 

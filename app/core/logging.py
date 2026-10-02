@@ -4,6 +4,8 @@ import traceback
 
 from asyncio         import CancelledError
 from contextvars     import ContextVar
+from logging.handlers import RotatingFileHandler
+from os              import getenv
 from pathlib         import Path
 from uuid            import uuid4
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -70,11 +72,16 @@ class ServerExceptionFilter(logging.Filter):
 def configure_logging():
     app_logger = logging.getLogger("app")
     if not app_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(
+        formatter = logging.Formatter(
             "%(asctime)s %(levelname)s %(filename)s:%(lineno)d request_id=%(request_id)s %(message)s"
-        ))
+        )
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
         app_logger.addHandler(handler)
+        if log_file := getenv("BACKEND_LOG_FILE"):
+            file_handler = RotatingFileHandler(log_file, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+            file_handler.setFormatter(formatter)
+            app_logger.addHandler(file_handler)
     app_logger.setLevel(logging.INFO)
     app_logger.propagate = False
     server_logger = logging.getLogger("uvicorn.error")

@@ -8,8 +8,11 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      BACKEND_LOG_FILE: /code/logs/backend.log
     volumes:
       - ./app:/code/app
+      - backend-logs:/code/logs
 
     networks:
       - chatbot-network
@@ -53,3 +56,4 @@ networks:
 
 volumes:
   mysql-data:
+  backend-logs:

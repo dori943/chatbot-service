@@ -159,6 +159,11 @@ SOURCE /tmp/check_logs.sql;
 
 SQL은 processing을 따로 세고 error·timeout만 실패로 집계한다. DB 기록과 서버 로그는 request_id로 연결한다.
 
+## 로그 확인 방법
+```bash
+docker compose exec -T backend cat /code/logs/backend.log
+```
+
 ## 팀 구성 및 작업 요약
 
 역할은 [협업 규칙](.github/CONTRIBUTING.md)과 Git 이력을 기준으로 한다.

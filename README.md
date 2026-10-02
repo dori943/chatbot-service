@@ -133,7 +133,7 @@ Content-Type: application/json
 | login | id / pw | VARCHAR(50) PK / VARCHAR(255) | 사용자 ID / bcrypt 해시 |
 | chat_logs | id / user_id | BIGINT PK / VARCHAR(50) FK | 기록 ID / 사용자 ID |
 | chat_logs | room_id / room_name | VARCHAR(64) / VARCHAR(100) | 방 ID / 질문 당시 이름 |
-| chat_logs | question / answer | VARCHAR(5000) / VARCHAR(5000) NULL | 질문 / 성공 답변 |
+| chat_logs | question / answer | VARCHAR(1000) / VARCHAR(5000) NULL | 질문 / 성공 답변 |
 | chat_logs | status / error_code | VARCHAR(20) / VARCHAR(50) NULL | 처리 상태 / 실패 원인 |
 | chat_logs | latency_ms / model | INT NULL / VARCHAR(80) NULL | AI 처리 시간 / 모델 |
 | chat_logs | request_id / created_at | VARCHAR(64) / DATETIME(6) | 로그 연결 ID / UTC 생성 시각 |

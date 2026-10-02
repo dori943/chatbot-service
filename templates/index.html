@@ -133,10 +133,10 @@
       <div class="composer-dock">
         <form id="chat-form" class="composer chat-form">
           <label class="sr-only" for="question">메시지 입력</label>
-          <textarea id="question" class="question" placeholder="무엇이든 물어보세요" rows="2" aria-describedby="status" required></textarea>
+          <textarea id="question" class="question" placeholder="무엇이든 물어보세요" rows="2" maxlength="1000" aria-describedby="status" required></textarea>
           <div class="composer-tools">
             <span class="input-hint">Enter로 전송 · Shift+Enter로 줄바꿈</span>
-            <span id="char-count" class="char-count">0 / 5,000</span>
+            <span id="char-count" class="char-count">0 / 1,000</span>
             <button class="send-button" id="send" type="submit" aria-label="메시지 보내기">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M12 19V5m-6 6 6-6 6 6"/>

@@ -14,7 +14,7 @@ from app.utils              import security
 
 
 @pytest.mark.parametrize("payload", [
-    {}, {"question": ""}, {"question": " \n "}, {"question": "가" * 5001},
+    {}, {"question": ""}, {"question": " \n "}, {"question": "가" * 1001},
     {"question": None}, {"question": 123}, {"question": []},
 ])
 def test_invalid_question_is_rejected_before_ai(client, database, auth_headers, ai_mock, payload):
@@ -65,13 +65,13 @@ def test_room_boundaries_and_normalization(client, database, auth_headers, ai_mo
 def test_question_boundary_normalization_and_configured_limit(client, database, auth_headers, ai_mock, monkeypatch):
     response = client.post(
         "/api/chat",
-        json    = {"room_id": "room-a", "room_name": "Test room", "question": "  " + "가" * 5000 + "  ", "user_id": "bob"},
+        json    = {"room_id": "room-a", "room_name": "Test room", "question": "  " + "가" * 1000 + "  ", "user_id": "bob"},
         headers = auth_headers,
     )
     assert response.status_code == 200
-    assert ai_mock.call_args.kwargs["question"] == "가" * 5000
+    assert ai_mock.call_args.kwargs["question"] == "가" * 1000
     with database() as db:
-        assert db.query(ChatLog).one().question == "가" * 5000
+        assert db.query(ChatLog).one().question == "가" * 1000
         assert db.query(ChatLog).one().user_id == "alice"
     monkeypatch.setattr(config, "MAX_QUESTION_LENGTH", 3)
     ai_mock.reset_mock()

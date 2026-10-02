@@ -66,7 +66,7 @@ data/init.sql은 DB 볼륨의 최초 생성 시에만 실행된다. 재빌드해
 | AI_API_KEY | 서버의 Gemini API 키 |
 | AI_MODEL, AI_FALLBACK_MODEL | 주/대체 모델: gemini-3.8-flash / gemini-3.1-flash-lite |
 | AI_TIMEOUT_SECONDS, AI_TOTAL_TIMEOUT_SECONDS, AI_MAX_RETRIES | 호출/전체 제한 10초/26초, 재시도 1회 |
-| AI_CONTEXT_TURNS, MAX_CONTEXT_CHARS, MAX_QUESTION_LENGTH | 문맥 5턴/6,000자, 질문 최대 5,000자 |
+| AI_CONTEXT_TURNS, MAX_CONTEXT_CHARS, MAX_QUESTION_LENGTH | 문맥 5턴/6,000자, 질문 최대 1,000자 |
 | AI_MAX_TOKENS, AI_TEMPERATURE, AI_THINKING_LEVEL | 출력 800토큰, 온도 0.7, 추론 단계 low |
 
 예시 파일의 APP_ENV, APP_HOST, APP_PORT, LOG_LEVEL, ACCESS_TOKEN_EXPIRE_MINUTES는 현재 앱에서 읽지 않는다. JWT 유효기간은 코드에서 60분이다.
